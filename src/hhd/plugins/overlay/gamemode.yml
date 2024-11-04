@@ -1,8 +1,15 @@
-touchscreen:
+display:
   type: container
-  title: "Touchscreen"
+  title: Display
   children:
-    disable:
+
+    steamui_halfhz:
+      tags: [non-essential]
+      type: bool
+      title: "Run Steam at 60/72 Hz"
+      default: true
+
+    touchscreen_disable:
       type: bool
       title: "Disable Touchscreen (Until Restart)"
 
