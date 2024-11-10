@@ -14,7 +14,7 @@ from hhd.controller.physical.rgb import LedDevice, is_led_supported
 from hhd.controller.virtual.uinput import UInputDevice
 from hhd.plugins import Config, Context, Emitter, get_gyro_state, get_outputs
 
-from .const import BTN_MAPPINGS, DEFAULT_MAPPINGS
+from .const import BTN_MAPPINGS, DEFAULT_MAPPINGS, TECNO_RAW_INTERFACE_BTN_MAP
 
 FIND_DELAY = 0.1
 ERROR_DELAY = 0.3
@@ -29,6 +29,9 @@ GAMEPAD_PID = 0x028E
 
 MSI_CLAW_VID = 0x0DB0
 MSI_CLAW_PID = 0x1901
+
+TECNO_VID = 0x2993
+TECNO_PID = 0x2001
 
 KBD_VID = 0x0001
 KBD_PID = 0x0001
@@ -60,7 +63,13 @@ def plugin_run(
             first_disabled = True
 
         try:
-            vid = MSI_CLAW_VID if dconf.get("claw", False) else GAMEPAD_VID
+            match dconf.get("type", None):
+                case "tecno":
+                    vid = TECNO_VID
+                case "claw":
+                    vid = MSI_CLAW_VID
+                case _:
+                    vid = GAMEPAD_VID
             found_device = bool(enumerate_evs(vid=vid))
         except Exception:
             logger.warning("Failed finding device, skipping check.")
@@ -105,28 +114,33 @@ def controller_loop(
     conf: Config, should_exit: TEvent, updated: TEvent, dconf: dict, emit: Emitter
 ):
     debug = DEBUG_MODE
+    dtype = dconf.get("type", "generic")
+    dgyro = dconf.get("display_gyro", True)
 
     # Output
     d_producers, d_outs, d_params = get_outputs(
         conf["controller_mode"],
         None,
-        conf["imu"].to(bool),
+        dgyro and conf["imu"].to(bool),
         emit=emit,
         rgb_modes={"disabled": [], "solid": ["color"]} if is_led_supported() else None,
     )
     motion = d_params.get("uses_motion", True)
 
     # Imu
-    d_imu = CombinedImu(
-        conf["imu_hz"].to(int),
-        get_gyro_state(conf["imu_axis"], dconf.get("mapping", DEFAULT_MAPPINGS)),
-    )
+    if dgyro:
+        d_imu = CombinedImu(
+            conf["imu_hz"].to(int),
+            get_gyro_state(conf["imu_axis"], dconf.get("mapping", DEFAULT_MAPPINGS)),
+        )
+    else:
+        d_imu = None
     d_timer = HrtimerTrigger(conf["imu_hz"].to(int), [HrtimerTrigger.IMU_NAMES])
 
     # Inputs
     d_xinput = GenericGamepadEvdev(
-        vid=[GAMEPAD_VID, MSI_CLAW_VID],
-        pid=[GAMEPAD_PID, MSI_CLAW_PID],
+        vid=[GAMEPAD_VID, MSI_CLAW_VID, TECNO_VID],
+        pid=[GAMEPAD_PID, MSI_CLAW_PID, TECNO_PID],
         # name=["Generic X-Box pad"],
         capabilities={EC("EV_KEY"): [EC("BTN_A")]},
         required=True,
@@ -140,6 +154,14 @@ def controller_loop(
         grab=True,
         btn_map=dconf.get("btn_mapping", BTN_MAPPINGS),
     )
+    d_kbd_2 = None
+
+    kargs = {}
+    if dtype == "tecno":
+        kargs = {
+            "keyboard_is": "steam_qam",
+            "qam_hhd": True,
+        }
 
     multiplexer = Multiplexer(
         trigger="analog_to_discrete",
@@ -148,6 +170,7 @@ def controller_loop(
         nintendo_mode=conf["nintendo_mode"].to(bool),
         emit=emit,
         params=d_params,
+        **kargs,
     )
 
     d_volume_btn = UInputDevice(
@@ -201,12 +224,23 @@ def controller_loop(
                 time.sleep(1)
                 d_vend.open()
                 assert d_vend.dev
-                d_vend.dev.write(bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x01, 0x00, 0x00]))
+                d_vend.dev.write(
+                    bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x01, 0x00, 0x00])
+                )
             finally:
                 d_vend.close(True)
+        if dtype == "tecno":
+            d_kbd_2 = GenericGamepadHidraw(
+                vid=[TECNO_VID],
+                pid=[TECNO_PID],
+                usage_page=[0xFFA0],
+                usage=[0x0001],
+                required=True,
+                btn_map=TECNO_RAW_INTERFACE_BTN_MAP,
+            )
 
         prepare(d_xinput)
-        if motion:
+        if motion and d_imu:
             start_imu = True
             if dconf.get("hrtimer", False):
                 start_imu = d_timer.open()
@@ -214,6 +248,8 @@ def controller_loop(
                 prepare(d_imu)
         prepare(d_volume_btn)
         prepare(d_kbd_1)
+        if d_kbd_2:
+            prepare(d_kbd_2)
         for d in d_producers:
             prepare(d)
 
