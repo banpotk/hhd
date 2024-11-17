@@ -9,13 +9,15 @@ from typing import Literal, cast
 
 from Xlib import display
 
-from hhd.plugins import Context, Emitter, Config
+from hhd.plugins import Config, Context, Emitter
 
 from .controllers import OverlayWriter
 from .overlay import find_overlay_exe, inject_overlay, launch_overlay_de
+from .systemd import WakeHandler
 from .x11 import (
     HHD_ID,
     STEAM_ID,
+    apply_gamescope_config,
     does_steam_exist,
     find_focusable_windows,
     find_hhd,
@@ -30,9 +32,9 @@ from .x11 import (
     prepare_hhd,
     process_events,
     register_changes,
+    set_dpms,
     show_hhd,
     update_steam_values,
-    apply_gamescope_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,20 @@ LOOP_SLEEP = 0.05
 OVERLAY_CHECK_INTERVAL = 5
 GAME_CHECK_INTERVAL = 2
 
+SUPPORTS_STANDBY = os.environ.get("HHD_GS_STANDBY", "0") == "1"
+
+def standby_transition(state: str):
+    if not SUPPORTS_STANDBY:
+        return
+    
+    try:
+        if not os.path.exists("/sys/power/standby"):
+            return
+
+        with open("/sys/power/standby", "w") as f:
+            f.write(state)
+    except Exception as e:
+        logger.error(f"Failed to set standby state to {state}:\n{e}")
 
 def loop_manage_desktop(
     proc: subprocess.Popen,
@@ -80,7 +96,8 @@ def loop_manage_desktop(
                 l = proc.stderr.readline()[:-1]
                 if not l:
                     break
-                logger.info(f"UI: {l}")
+                if l.strip():
+                    logger.info(f"UI: {l}")
 
             # Update overlay status
             while True:
@@ -112,7 +129,7 @@ def loop_manage_overlay(
     writer: OverlayWriter,
     should_exit: TEvent,
     requested: bool,
-    gsconf: Config
+    gsconf: Config,
 ):
     try:
         status: Status = "closed"
@@ -144,6 +161,8 @@ def loop_manage_overlay(
         last_game_check = 0
         old = None
         shown = False
+        wake_handler = None
+        dpms_time = None
 
         if hhd:
             logger.info(f"UI window found in gamescope, starting handler.")
@@ -162,7 +181,10 @@ def loop_manage_overlay(
                 break
 
             start = time.perf_counter()
-            select.select([fd_out, fd_err, fd_disp], [], [], GUARD_CHECK)
+            fds = [fd_out, fd_err, fd_disp]
+            if wake_handler and wake_handler.fd != -1:
+                fds.append(wake_handler.fd)
+            select.select(fds, [], [], GUARD_CHECK)
 
             if proc.poll() is not None:
                 logger.warning(f"Overlay stopped (steam may have restarted). Closing.")
@@ -172,6 +194,41 @@ def loop_manage_overlay(
             # yank its focus
             process_events(disp)
             apply_gamescope_config(disp, gsconf, gsprev)
+
+            # Handle dpms
+            dpms_en = gsconf.get("dpms", False)
+            if dpms_en and not wake_handler:
+                wake_handler = WakeHandler()
+                ret = wake_handler.start()
+                if ret:
+                    logger.info("Started DPMS handler.")
+                else:
+                    logger.error("Failed to start wake handler, DPMS will not work.")
+            elif not dpms_en and wake_handler:
+                wake_handler.close()
+                wake_handler = None
+                logger.info("Stopped DPMS handler.")
+                if dpms_time:
+                    set_dpms(disp, False)
+            if dpms_en and wake_handler:
+                s = wake_handler()
+                if s == "entry":
+                    set_dpms(disp, True)
+                    standby_transition("sleep")
+                    dpms_time = start
+                    logger.info("Enabling gamescope DPMS.")
+                    wake_handler.inhibit(False)
+                elif s == "exit":
+                    set_dpms(disp, False)
+                    standby_transition("active")
+                    dpms_time = None
+                    logger.info("Disabling gamescope DPMS.")
+                    wake_handler.inhibit(True)
+            if dpms_time and start - dpms_time > 5:
+                set_dpms(disp, False)
+                dpms_time = None
+                logger.error("DPMS timeout lapsed, disabling.")
+
             if steam and shown:
                 old, was_shown = update_steam_values(disp, steam, old)
                 if was_shown:
@@ -203,7 +260,8 @@ def loop_manage_overlay(
                 l = proc.stderr.readline()[:-1]
                 if not l:
                     break
-                logger.info(f"UI: {l}")
+                if l.strip():
+                    logger.info(f"UI: {l}")
 
             # Update overlay status
             while True:
@@ -244,6 +302,8 @@ def loop_manage_overlay(
         proc.kill()
         proc.wait()
         emit.grab(False)
+        if wake_handler:
+            wake_handler.close()
 
 
 class OverlayService:
@@ -312,7 +372,15 @@ class OverlayService:
         self.should_exit = TEvent()
         self.t = Thread(
             target=loop_manage_overlay,
-            args=(disp, self.proc, self.emit, self.writer, self.should_exit, requested, self.gsconf),
+            args=(
+                disp,
+                self.proc,
+                self.emit,
+                self.writer,
+                self.should_exit,
+                requested,
+                self.gsconf,
+            ),
         )
         self.t.start()
 
@@ -406,3 +474,20 @@ class OverlayService:
         except Exception as e:
             logger.error(f"Failed launching overlay with error:\n{e}")
             self.close()
+
+    def notify(self, events):
+        if not SUPPORTS_STANDBY:
+            return
+        if not self.gsconf or not self.gsconf.get("dpms", False):
+            return
+        
+        for ev in events:
+            if ev.get("type", None) != "special":
+                continue
+            if ev.get("event", None) != "pbtn_short":
+                continue
+            
+            # If steam does not suspend us the following breaks:
+            # # Fire screen_off while the powerbutton event is happening
+            # logger.info("Powerbutton event detected, transitioning to standby.")
+            # standby_transition("screen_off")
