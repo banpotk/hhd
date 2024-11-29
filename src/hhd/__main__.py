@@ -412,16 +412,22 @@ def main():
                     join(CONFIG_DIR, "profiles"),
                 ]
                 for fn in cfg_fns:
-                    fd = os.open(expanduser(fn, ctx), os.O_RDONLY)
-                    fcntl.fcntl(
-                        fd,
-                        fcntl.F_NOTIFY,
-                        fcntl.DN_CREATE
-                        | fcntl.DN_DELETE
-                        | fcntl.DN_MODIFY
-                        | fcntl.DN_RENAME
-                        | fcntl.DN_MULTISHOT,
-                    )
+                    fd = -1
+                    try:
+                        fd = os.open(expanduser(fn, ctx), os.O_RDONLY)
+                        fcntl.fcntl(
+                            fd,
+                            fcntl.F_NOTIFY,
+                            fcntl.DN_CREATE
+                            | fcntl.DN_DELETE
+                            | fcntl.DN_MODIFY
+                            | fcntl.DN_RENAME
+                            | fcntl.DN_MULTISHOT,
+                        )
+                    except Exception:
+                        if fd != -1:
+                            os.close(fd)
+                        continue
                     cfg_fds.append(fd)
 
                 should_initialize.clear()

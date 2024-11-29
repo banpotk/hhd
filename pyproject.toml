@@ -1,6 +1,6 @@
 [project]
 name = "hhd"
-version = "3.6.0"
+version = "3.6.1"
 authors = [
   { name="Kapenekakis Antheas", email="pypi@antheas.dev" },
 ]
@@ -31,6 +31,7 @@ dependencies = [
 [project.entry-points."console_scripts"]
 hhd = "hhd.__main__:main"
 "hhd.contrib" = "hhd.contrib:main"
+hhdctl = "hhd.http.ctl:main"
 
 [project.entry-points."hhd.plugins"]
 legion_go = "hhd.device.legion_go:autodetect"
