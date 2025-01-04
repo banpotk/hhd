@@ -1,10 +1,10 @@
 sections:
-  system: System
   tdp: TDP
   rgb: RGB
   controllers: Controller
-  hhd: Settings
-  shortcuts: Shortcuts
+  wincontrols: WinControls
   gamemode: Gamemode
-  bazzite: Bazzite
-  utilities: Utilities
+  updates: Updates
+  debug: Bug Report
+  shortcuts: Shortcuts
+  hhd: Settings

@@ -23,7 +23,9 @@ BTN_MAPPINGS: dict[int, Button] = {
     B("KEY_T"): "share",  # T + LCTRL + LSHFT + LALT
 }
 
-AMBERNIC_MAPPINGS: dict[int, str] = {
+ANBERNIC_MAPPINGS: dict[int, str] = {
+    B("KEY_VOLUMEUP"): "key_volumeup",
+    B("KEY_VOLUMEDOWN"): "key_volumedown",
     B("KEY_LEFTMETA"): "share",
     B("KEY_G"): "mode",
 }
@@ -45,9 +47,9 @@ TECNO_BTN_MAPPINGS = {
 TECNO_RAW_INTERFACE_BTN_MAP: dict[int | None, dict[Button, BM]] = {
     0x74: {
         # Misc
-        "mode": BM((5 << 3) + 7), # 1: Bottom left
-        "keyboard": BM((5 << 3) + 6), # 2: Bottom right
-        "extra_l1": BM((7 << 3) + 2), # 3: Keyboard switch button
+        "mode": BM((5 << 3) + 7),  # 1: Bottom left
+        "keyboard": BM((5 << 3) + 6),  # 2: Bottom right
+        "extra_l1": BM((7 << 3) + 2),  # 3: Keyboard switch button
     }
 }
 
@@ -156,10 +158,11 @@ CONFS = {
         "name": "AYANEO 2021 Pro Retro Power",
         **AYA_DEFAULT_CONF,
     },
-    # Ambernic
+    "KUN": {"name": "AYANEO 2021 Kun", **AYA_DEFAULT_CONF},
+    # Anbernic
     "Win600": {
-        "name": "Ambernic Win600",
-        "btn_mapping": AMBERNIC_MAPPINGS,
+        "name": "Anbernic Win600",
+        "btn_mapping": ANBERNIC_MAPPINGS,
         "extra_buttons": "none",
     },
     # MSI Claw

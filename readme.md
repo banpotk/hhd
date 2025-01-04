@@ -12,76 +12,24 @@
 <!-- [![]()]() -->
 
 # Handheld Daemon
-Handheld Daemon is a project that aims to provide utilities for managing handheld
-devices.
-It features a fully functional controller emulator that exposes gyro,
-paddles, LEDs and QAM across Steam, RPCS3, Dolphin and others.
-In addition, it features TDP controls all Ryzen devices and bespoke manufacturer
-controls for the Legion Go and ROG Ally.
-It brings all supported devices up to parity with Steam Deck.
-Read [supported devices](#supported-devices) to see if your device is supported.
-
-Handheld Daemon exposes configuration through an API, with a gamemode overlay
-(double press/hold Side Menu), Decky plugin ([hhd-decky](https://github.com/hhd-dev/hhd-decky)),
-web app ([hhd.dev](https://hhd.dev)) and desktop app
-([hhd-ui](https://github.com/hhd-dev/hhd-ui)).
-
-*Current Features*:
-- DualSense and Dualsense Edge emulation
-  - All buttons supported
-  - Rumble feedback
-  - Touchpad support (Steam Input as well)
-  - LED remapping
-- Xbox Elite emulation
-  - No weird glyphs
-  - Back button support
-- Extra buttons as:
-  - Steam Keyboard + Overlay Shortcuts
-  - Left/Right Touchpad clicks in Dualsense mode (supported by Steam + Dualsense Games)
-- Complete SDL UInput Emulation (currently disabled, see https://github.com/libsdl-org/SDL/issues/9688 )
-  - Joycon (Left, Right, Pair), Switch Pro, Dualsense (Edge), Xbox One, Xbox Series X, Xbox 360
-  - Gyro + Paddles for all SDL apps 
-- Virtual Touchpad Emulation
-  - Fixes left and right clicks within gamemode when using the device touchpad.
-- Power Button plugin for Big Picture/Steam Deck Mode
-  - Short press makes Steam backup saves and wink before suspend.
-  - Long press opens Steam power menu.
-- TDP Controls ([adjustor](https://github.com/hhd-dev/adjustor))
-  - For ROG Ally and Legion Go: 
-    - TDP, Fan Curves, Charge Limiting the Asus and Lenovo way
-    - Asus: Kernel Driver
-    - Lenovo: `acpi_call` while the kernel driver is being developed
-  - For Other Devices without firmware TDP controls:
-    - `acpi_call` + AMD's official manufacturer TDP ACPI bindings
-    - Ayaneo, Ayn, GPD, OneXPlayer
-- Configuration:
-  - Fully Featured Gamemode (Gamescope) Overlay
-  - Desktop App
-  - Web app
-  - Config files
-- Built-in updater.
+Handheld Daemon provides hardware enablement for Windows handhelds, so that they run correctly in Linux. It acts as a vendor interface replacement (e.g., Armoury Crate equivalent). It does fan curves, TDP controls, controller emulation including gyro, back buttons, and SteamOS shortcuts, and RGB remapping. All of this is through a gamescope overlay, accessible through double tapping the side menu button of the device, and a desktop app.
 
 ## Showcase
 ![Overlay](./docs/overlay.gif)
 
 ## <a name="devices"></a>Supported Devices
-The following devices have been verified to work correctly, with TDP, QAM, 
-Paddles/extra buttons, RGB remapping, Touchpad, and Gyro support.
-The gyro axis might be incorrect for some of those devices, and can be easily
-fixed in the configuration menu by following [these steps](#axis).
-If you do take the time, please open an issue with the correct mapping so it
-is added to your device.
+Handheld Daemon features great support for Lenovo, Asus, GPD, OneXPlayer, and Ayn. It also features some support for Ayaneo devices, Anbernic, and MSI. We aim to support new models by these manufacturers as they release, so if you don't see your device below, chances are it will still work or just needs to have its config included.
 
 - Legion Go
 - Asus ROG
   - Ally
   - Ally X
-- GPD Win (Both 2023/2024)
-  - Win 4 (No LEDs)
+- GPD Win (all model years)
+  - Win 4
   - Win Mini
   - Win Max 2
 - OneXPlayer
-  - X1 (AMD)
+  - X1 (AMD, Intel w/o TDP)
   - X1 Mini
   - F1, F1 EVA-01, F1L, F1 OLED, F1 Pro
   - 2, 2 APR23, 2 PRO APR23, 2 PRO APR23 EVA-01
@@ -99,17 +47,15 @@ is added to your device.
   - SLIDE
   - 2021 Standard/Pro/Pro Retro Power
   - NEO 2021/Founder
+  - KUN (only front buttons)
 - AOKZOE (No LEDs)
   - A1 Normal/Pro
-- Ambernic
+- Anbernic
   - Win600 (no keyboard button yet)
-
-In addition, Handheld Daemon will attempt to work on Ayaneo, Ayn, Onexplayer, and 
-GPD Win devices that have not been verified to work 
-(controller emulation will be off on first start).
-If everything works and you fix the gyro axis for your device, open an issue
-so that your device can be added to the supported list.
-Touchpad emulation will not work for devices not on the supported list.
+- MSI
+  - Claw (1st Gen; suspend issues)
+- TECNO
+  - Pocket Go (all buttons except bottom switch and gyro; no RGB)
 
 ## Installation Instructions
 For Arch and Fedora see [here](#os-install).
@@ -143,35 +89,28 @@ sudo systemctl start hhd_local@$(whoami)
 ```
 
 ### <a name="issues"></a>After Install Instructions
+For all devices, use the [bazzite kernel](https://github.com/hhd-dev/kernel-bazzite)
+for best support or Bazzite. Some caveats for certain devices are listed below.
+
 #### Extra steps for ROG Ally
 You can hold the ROG Crate button to switch to the ROG Ally's Mouse mode to turn
 the right stick into a mouse.
 
 Combinations with the ROG, Armory Crate buttons is not supported in the Ally,
-you can swap them with start/select for this functionality.
-
-For Ally X, kernel 6.11+ is required, with a few caveats. See [here](https://github.com/hhd-dev/hhd/issues/95#issuecomment-2336425436) 
-for details.
+but you can use ROG swap for that.
 
 #### Extra steps GPD Win Devices
-In order for the back buttons in GPD Win Devices to work, you need to map the
-back buttons to Left: PrintScreen, Right: Pausc using Windows (onscreen keyboard?).
-This is the default mapping, so if you never remapped them using Windows you
-will not have to.
-Handheld Daemon automatically handles the interval to enable being able to hold
-the buttons.
+Swipe the left top of the screen to show handheld daemon in gamescope or open
+the desktop app and head to the WinControls tab. There, press apply to remap
+the back buttons correctly.
 
-Here is how the button settings should look:
-```
-Left-key: PrtSc + 0ms + NC + 0ms + NC + 0ms + NC
-Right-key: Pausc + 0ms + NC + 0ms + NC + 0ms + NC
-```
+For the GPD Win 4, the Menu button is used as a combo (Short Pres QAM,
+long press Xbox button, double press hhd) and select can be used for
+SteamOS chords (e.g., Select + RT is screenshot). For other devices, the R4 
+button is used to bring up QAM (single tap), and HHD (double tap/hold).
+You can customize to your tastes in the Controller section.
 
-Unfortunately, it is not possible to rapid double tap the buttons due to their
-implementation.
-The R4 button is mapped to Side Menu (QAM) by default.
-
-#### Extra steps for Ayaneo/Ayn/Onexplayer
+#### Extra steps for Ayaneo/Ayn
 You might experience a tiny amount of lag with the Ayaneo LEDs.
 The paddles of the Ayn Loki Max are not remappable as far as we know.
 
@@ -180,50 +119,10 @@ If you have set any mappings on Legion Space, they will interfere with Handheld
 Daemon.
 You can factory reset the Controllers from the Handheld Daemon settings.
 
-The controller gyros of the Legion Go tend to drift and have noise.
-However, they are excellent after calibration.
-Calibrate them using steam calibration and be patient, as they will fail a lot.
-Depending on their state in rare cases they might not be possible to calibrate.
-
-If you are using a kernel older than 6.8, and you are not on a gaming distro
-(Nobara, Bazzite), you need the following rule for the controllers
-to be recognized.
-```bash
-# Enable xpad for the Legion Go controllers
-ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="6182", RUN+="/sbin/modprobe xpad" RUN+="/bin/sh -c 'echo 17ef 6182 > /sys/bus/usb/drivers/xpad/new_id'"
-```
-
-#### High Touchpad Sensitivity in Steam Input
-By default, the Dualsense kernel driver exposes the Dualsense trackpad as a normal
-trackpad.
-This means that if you go to use it as steam input, you still get the normal
-trackpad input.
-This leads to double input.
-You should use the package `ds-inhibit` to fix that, which detects steam and mutes
-the trackpad while Steam is running.
-The package `ds-inhibit` is available in AUR, packaged for Nobara, and enabled
-by default in Bazzite.
-
-#### Playstation Glyphs and Controller Image
-New steam versions allow for universal glyphs that are controller agnostic,
-for when using the Dualsense output option.
-In addition, the new default Xbox option has the familiar Xbox layout.
-If you are willing to install Decky, which has certain stability issues
-as steam updates, Bazzite vendors a controller css theme 
-for Decky that changes playstation glyphs.
-
-## <a name="configuration"></a>Configuration
-Open the overlay (double press side button), or open the desktop app (`Handheld Daemon`/`$ hhd-ui`),
-or go to [hhd.dev](https://hhd.dev) and enter your device token (`~/.config/hhd/token`).
-Then just start configuring!
-
-While deprecated, the Decky plugin is still available:
-```
-curl -L https://github.com/hhd-dev/hhd-decky/raw/main/install.sh | sh
-```
-
-The configuration files are stored under `~/.config/hhd` with the main one being
-`state.yml`, which can be edited and will hot reload.
+The controller gyros of the Legion Go tend to drift sometimes. Calibrate them
+with the built-in calibration by pressing LT + LS and RT + RS, then turning
+the Joysticks twice and pressing the triggers. Finally, the controllers will
+vibrate and flash the leds, zeroing the gyroscope.
 
 ## <a name="os-install"></a> Distribution Install
 You can install Handheld Daemon from [AUR](https://aur.archlinux.org/packages/hhd) 
@@ -374,13 +273,12 @@ Much like a lot of open-source projects, Handheld Daemon is a community effort.
 It relies on the kernel drivers 
 [oxp-sensors](https://github.com/torvalds/linux/blob/master/drivers/hwmon/oxp-sensors.c), [ayn-platform](https://github.com/ShadowBlip/ayn-platform), 
 [ayaneo-platform](https://github.com/ShadowBlip/ayaneo-platform), 
-[bmi260](https://github.com/hhd-dev/bmi260),
+[bmi260](https://github.com/hhd-dev/bmi260), [gpdfan](https://github.com/Cryolitia/gpd-fan-driver/),
 and [asus-wmi](https://github.com/torvalds/linux/blob/master/drivers/platform/x86/asus-wmi.c).
 In addition, certain parts of Handheld Daemon reference the reverse engineering
 efforts of [asus-linux](https://gitlab.com/asus-linux), 
 the [Handheld Companion](https://github.com/Valkirie/HandheldCompanion) project,
-the [ValvePython](https://github.com/ValvePython) project,
-and the [HandyGCCS](https://github.com/ShadowBlip/HandyGCCS) project.
+the [ValvePython](https://github.com/ValvePython) project, [pyWinControls](https://github.com/pelrun/pyWinControls), and the [HandyGCCS](https://github.com/ShadowBlip/HandyGCCS) project.
 Finally, its functionality is made possible thanks to thousands of hours of 
 volunteer testing, who have provided feedback and helped shape the project.
 Some of those volunteers integrated support for their devices directly, especially

@@ -145,7 +145,7 @@ class CustomSetting(TypedDict):
 
     type: Literal["custom"]
     tags: Sequence[str]
-    title: str
+    title: str | None
     hint: str | None
 
     config: Any | None
@@ -291,8 +291,22 @@ DEFAULT_TAGS = {
 TYPE_TAGS = {
     "multiple": {"options": {}},
     "discrete": {"options": []},
-    "int": {"min": None, "max": None, "step": None, "unit": None, "smin": None, "smax": None},
-    "float": {"min": None, "max": None, "step": None, "unit": None, "smin": None, "smax": None},
+    "int": {
+        "min": None,
+        "max": None,
+        "step": None,
+        "unit": None,
+        "smin": None,
+        "smax": None,
+    },
+    "float": {
+        "min": None,
+        "max": None,
+        "step": None,
+        "unit": None,
+        "smin": None,
+        "smax": None,
+    },
     "custom": {"config": None},
 }
 
@@ -328,11 +342,13 @@ def merge_reduce(
     else:
         if a.get("type", None) == "container":
             s["children"] = {
-                k: merge_reduce(v) for k, v in a.get("children", {}).items()
+                k: merge_reduce(v) for k, v in (a.get("children", None) or {}).items()
             }
 
         if a.get("type", None) == "mode":
-            s["modes"] = {k: merge_reduce(v) for k, v in a.get("modes", {}).items()}
+            s["modes"] = {
+                k: merge_reduce(v) for k, v in (a.get("modes", None) or {}).items()
+            }
     return s
 
 
@@ -694,6 +710,73 @@ class Validator(Protocol):
         return False
 
 
+def standard_validator(tags, config, value):
+    return True
+
+    if "progress" in tags:
+        if not value:
+            return False
+
+        # Progress contains a dict with
+        # three values: value, max, unit, and text
+        if not isinstance(value, Mapping):
+            return False
+
+        # Value is optional and should be a number
+        # If it is none, the progress bar should be pulsing
+        if (
+            "value" in value
+            and value is not None
+            and not isinstance(value["value"], (int, float))
+        ):
+            return False
+
+        # Max is required and should be a number (if value is present)
+        if "max" not in value and "value" in value and value["value"] is not None:
+            return False
+
+        if (
+            "max" in value
+            and value["max"] is not None
+            and not isinstance(value["max"], (int, float))
+        ):
+            return False
+
+        # Unit is optional, should be text
+        if (
+            "unit" in value
+            and value["unit"] is not None
+            and not isinstance(value["unit"], str)
+        ):
+            return False
+
+        # Text is optional, should be text
+        if (
+            "text" in value
+            and value["text"] is not None
+            and not isinstance(value["text"], str)
+        ):
+            return False
+
+        return True
+
+    if "dropdown" in tags:
+        if not value:
+            return False
+
+        if not isinstance(value, dict):
+            return False
+
+        if "options" not in value:
+            return False
+
+        if "value" in value and value["value"] not in value["options"]:
+            return False
+
+        return True
+
+    return False
+
 def validate_config(
     conf: Config, settings: HHDSettings, validator: Validator, use_defaults: bool = True
 ):
@@ -758,7 +841,10 @@ def validate_config(
                     else:
                         del conf[k]
             case "custom":
-                if not validator(d["tags"], d["config"], v):
+                if not (
+                    validator(d["tags"], d["config"], v)
+                    or standard_validator(d["tags"], d["config"], v)
+                ):
                     if use_defaults:
                         conf[k] = default
                     else:
