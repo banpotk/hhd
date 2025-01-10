@@ -108,7 +108,7 @@ def get_branch(ref: str, branches: dict, fallback: bool = True):
     return next(iter(branches))
 
 
-def get_rebase_refs(ref: str, tags, lim: int = 5, branches: dict = {}):
+def get_rebase_refs(ref: str, tags, lim: int = 7, branches: dict = {}):
     logger.info(f"Getting rebase refs for {ref}")
     try:
         output = subprocess.check_output(SKOPEO_REBASE_CMD(ref)).decode("utf-8")
@@ -420,7 +420,7 @@ class BootcPlugin(HHDPlugin):
                 # Handle steamos polkit
                 steamos_upd = False
                 if steamos == "check":
-                    if target:
+                    if target or e == "ready":
                         conf["updates.bootc.steamos-update"] = "has-update"
                     else:
                         update = True
