@@ -65,6 +65,7 @@ def standby_transition(state: str):
             return
 
         with open("/sys/power/standby", "w") as f:
+            logger.info(f"Setting standby state to '{state}'.")
             f.write(state)
     except Exception as e:
         logger.error(f"Failed to set standby state to {state}:\n{e}")

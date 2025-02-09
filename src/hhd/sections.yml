@@ -3,8 +3,8 @@ sections:
   rgb: RGB
   controllers: Controller
   wincontrols: WinControls
-  gamemode: Gamemode
+  gamemode: General
   updates: Updates
-  debug: Bug Report
+  debug: Bugreport
   shortcuts: Shortcuts
   hhd: Settings

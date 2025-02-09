@@ -5,23 +5,20 @@ import time
 from threading import Event as TEvent
 from typing import Sequence
 
-from hhd.controller import Button, Consumer, Event, Producer, DEBUG_MODE
+from hhd.controller import DEBUG_MODE, Button, Consumer, Event, Producer
+from hhd.controller.base import Multiplexer
 from hhd.controller.lib.hide import unhide_all
-from hhd.controller.base import Multiplexer, TouchpadAction
 from hhd.controller.physical.evdev import B as EC
 from hhd.controller.physical.evdev import GenericGamepadEvdev, enumerate_evs
 from hhd.controller.virtual.uinput import HHD_PID_VENDOR, UInputDevice
 from hhd.plugins import Config, Context, Emitter, get_outputs
 
 from .const import (
-    LGO_RAW_INTERFACE_AXIS_MAP,
-    LGO_RAW_INTERFACE_BTN_ESSENTIALS,
-    LGO_RAW_INTERFACE_BTN_MAP,
-    LGO_RAW_INTERFACE_CONFIG_MAP,
-    LGO_TOUCHPAD_AXIS_MAP,
-    LGO_TOUCHPAD_BUTTON_MAP,
+    GOS_INTERFACE_AXIS_MAP,
+    GOS_INTERFACE_BTN_ESSENTIALS,
+    GOS_INTERFACE_BTN_MAP,
 )
-from .hid import LegionHidraw, RgbCallback
+from .hid import LegionHidraw, LegionHidrawTs, rgb_callback
 
 FIND_DELAY = 0.1
 ERROR_DELAY = 0.5
@@ -31,12 +28,11 @@ SELECT_TIMEOUT = 1
 
 logger = logging.getLogger(__name__)
 
-LEN_VID = 0x17EF
-LEN_PIDS = {
-    0x6182: "xinput",
-    0x6183: "dinput",
-    0x6184: "dual_dinput",
-    0x6185: "fps",
+GOS_VID = 0x1A86
+GOS_XINPUT = 0xE310
+GOS_PIDS = {
+    GOS_XINPUT: "xinput",
+    0xE311: "dinput",
 }
 
 
@@ -46,6 +42,7 @@ def plugin_run(
     context: Context,
     should_exit: TEvent,
     updated: TEvent,
+    dconf: dict,
     others: dict,
 ):
     reset = others.get("reset", False)
@@ -58,22 +55,22 @@ def plugin_run(
             pid = None
             first = True
             while not controller_mode and not should_exit.is_set():
-                devs = enumerate_evs(vid=LEN_VID)
+                devs = enumerate_evs(vid=GOS_VID)
                 if not devs:
                     if first:
                         first = False
-                        logger.warning(f"Legion go controllers not found, waiting...")
+                        logger.warning(f"Legion Go S controller not found, waiting...")
                     time.sleep(FIND_DELAY)
                     continue
 
                 for d in devs.values():
-                    if d.get("product", None) in LEN_PIDS:
+                    if d.get("product", None) in GOS_PIDS:
                         pid = d["product"]
-                        controller_mode = LEN_PIDS[pid]
+                        controller_mode = GOS_PIDS[pid]
                         break
                 else:
                     logger.error(
-                        f"Legion go controllers not found, waiting {ERROR_DELAY}s."
+                        f"Legion Go S controller not found, waiting {ERROR_DELAY}s."
                     )
                     time.sleep(ERROR_DELAY)
                     continue
@@ -94,15 +91,12 @@ def plugin_run(
             else:
                 if controller_mode != "xinput":
                     logger.info(
-                        f"Controllers in non-supported (yet) mode: {controller_mode}."
+                        f"Controller in non-supported (yet) mode: {controller_mode}."
                     )
                 else:
-                    logger.info(
-                        f"Controllers in xinput mode but emulation is disabled."
-                    )
+                    logger.info(f"Controller in xinput mode but emulation is disabled.")
                 init = time.perf_counter()
                 controller_loop_rest(
-                    controller_mode,
                     pid if pid else 2,
                     conf_copy,
                     should_exit,
@@ -119,19 +113,24 @@ def plugin_run(
             repeated_fail = failed_fast
             logger.error(f"Received the following error:\n{type(e)}: {e}")
             logger.error(
-                f"Assuming controllers disconnected, restarting after {sleep_time}s."
+                f"Assuming controller disconnected, restarting after {sleep_time}s."
             )
             # Raise exception
             if DEBUG_MODE:
-                raise e
+                try:
+                    import traceback
+
+                    traceback.print_exc()
+                except Exception:
+                    pass
             time.sleep(sleep_time)
         reset = False
 
     # Unhide all devices before exiting
     unhide_all()
 
+
 def controller_loop_rest(
-    mode: str,
     pid: int,
     conf: Config,
     should_exit: TEvent,
@@ -148,20 +147,29 @@ def controller_loop_rest(
         logger.info(f"Shortcuts disabled. Waiting for controllers to change modes.")
 
     d_raw = SelectivePassthrough(
-        LegionHidraw(
-            vid=[LEN_VID],
-            pid=list(LEN_PIDS),
+        LegionHidrawTs(
+            vid=[GOS_VID],
+            pid=list(GOS_PIDS),
             usage_page=[0xFFA0],
             usage=[0x0001],
             report_size=64,
-            axis_map=LGO_RAW_INTERFACE_AXIS_MAP,
-            btn_map=LGO_RAW_INTERFACE_BTN_MAP,
+            interface=6,
+            axis_map={None: GOS_INTERFACE_AXIS_MAP},
+            btn_map={None: GOS_INTERFACE_BTN_MAP},
             required=True,
-        ).with_settings(
-            gyro=None, reset=reset, swap_legion=conf["swap_legion_v2"].to(bool)
         ),
         passthrough_pressed=True,
     )
+    d_cfg = LegionHidraw(
+        vid=[GOS_VID],
+        pid=list(GOS_PIDS),
+        usage_page=[0xFFA0],
+        usage=[0x0001],
+        report_size=64,
+        interface=3,
+        callback=rgb_callback,
+        required=True,
+    ).with_settings(reset=reset)
 
     multiplexer = Multiplexer(
         dpad="both",
@@ -171,15 +179,14 @@ def controller_loop_rest(
         emit=emit,
     )
     d_uinput = UInputDevice(
-        name=f"HHD Shortcuts (Legion Mode: {mode})",
+        name=f"HHD Shortcuts (Legion Mode: dinput)",
         pid=HHD_PID_VENDOR | 0x0200 | (pid & 0xF),
-        phys=f"phys-hhd-shortcuts-legion-{mode}",
+        phys=f"phys-hhd-shortcuts-gos",
     )
 
     d_shortcuts = GenericGamepadEvdev(
-        vid=[LEN_VID],
-        pid=list(LEN_PIDS),
-        name=[re.compile(r"Legion-Controller \d-.. Keyboard")],
+        vid=[GOS_VID],
+        pid=list(GOS_PIDS),
         capabilities={EC("EV_KEY"): [EC("KEY_1")]},
         required=True,
     )
@@ -187,6 +194,7 @@ def controller_loop_rest(
     try:
         fds = []
         fds.extend(d_raw.open())
+        fds.extend(d_cfg.open())
         if shortcuts_enabled:
             fds.extend(d_shortcuts.open())
             fds.extend(d_uinput.open())
@@ -201,10 +209,12 @@ def controller_loop_rest(
                 if debug and evs:
                     logger.info(evs)
                 d_uinput.consume(evs)
+                d_cfg.consume(evs)
     finally:
         d_uinput.close(True)
         d_shortcuts.close(True)
         d_raw.close(True)
+        d_cfg.close(True)
 
 
 def controller_loop_xinput(
@@ -213,30 +223,12 @@ def controller_loop_xinput(
     debug = DEBUG_MODE
 
     # Output
-    dimu = conf["imu.mode"].to(str)
 
-    match dimu:
-        case "left":
-            simu = "left_to_main"
-            cidx = 1
-        case "right" | "both":
-            simu = "right_to_main"
-            cidx = 2
-        case _:
-            simu = None
-            cidx = 0
-
-    fix_hold = (
-        conf["touchpad_hold"].to(bool)
-        and conf["touchpad.mode"].to(TouchpadAction) == "controller"
-    )
     d_producers, d_outs, d_params = get_outputs(
         conf["xinput"],
-        conf["touchpad"],
-        dimu != "disabled",
-        controller_id=cidx,
+        None,
+        conf["imu"].to(bool),
         emit=emit,
-        dual_motion=dimu == "both",
         rgb_modes={
             "disabled": [],
             "solid": ["color"],
@@ -245,82 +237,58 @@ def controller_loop_xinput(
             "spiral": ["brightness", "speed"],
         },
     )
-    motion = d_params.get("uses_motion", True)
-    dual_motion = d_params.get("uses_dual_motion", True)
-    swap_legion = conf["swap_legion_v2"].to(bool)
-    if not dual_motion and dimu == "both":
-        dimu = "right"
-    if not motion:
-        dimu = "disabled"
+    swap_legion = conf["swap_legion"].to(bool)
 
     # Inputs
     d_xinput = GenericGamepadEvdev(
-        vid=[0x17EF],
-        pid=[0x6182],
-        # name=["Generic X-Box pad"],
+        vid=[GOS_VID],
+        pid=[GOS_XINPUT],
         capabilities={EC("EV_KEY"): [EC("BTN_A")]},
         required=True,
         hide=True,
     )
-    d_touch = GenericGamepadEvdev(
-        vid=[0x17EF],
-        pid=[0x6182],
-        name=[re.compile(".+Touchpad")],  # "  Legion Controller for Windows  Touchpad"
-        capabilities={EC("EV_KEY"): [EC("BTN_MOUSE")]},
-        btn_map=LGO_TOUCHPAD_BUTTON_MAP,
-        axis_map=LGO_TOUCHPAD_AXIS_MAP,
-        aspect_ratio=1,
-        required=True,
-    )
     d_raw = SelectivePassthrough(
-        LegionHidraw(
-            vid=[LEN_VID],
-            pid=list(LEN_PIDS),
+        LegionHidrawTs(
+            vid=[GOS_VID],
+            pid=list(GOS_PIDS),
             usage_page=[0xFFA0],
             usage=[0x0001],
             report_size=64,
-            axis_map=LGO_RAW_INTERFACE_AXIS_MAP,
-            btn_map=LGO_RAW_INTERFACE_BTN_MAP,
-            config_map=LGO_RAW_INTERFACE_CONFIG_MAP,
-            callback=RgbCallback(),
+            interface=6,
+            axis_map={None: GOS_INTERFACE_AXIS_MAP},
+            btn_map={None: GOS_INTERFACE_BTN_MAP},
             required=True,
-        ).with_settings(
-            gyro=dimu,
-            reset=reset,
-            use_touchpad=fix_hold,
-            swap_legion=swap_legion,
         )
     )
+    d_cfg = LegionHidraw(
+        vid=[GOS_VID],
+        pid=list(GOS_PIDS),
+        usage_page=[0xFFA0],
+        usage=[0x0001],
+        report_size=64,
+        interface=3,
+        callback=rgb_callback,
+        required=True,
+    ).with_settings(reset=reset)
 
     # Mute keyboard shortcuts, mute
     d_shortcuts = GenericGamepadEvdev(
-        vid=[LEN_VID],
-        pid=list(LEN_PIDS),
+        vid=[GOS_VID],
+        pid=list(GOS_PIDS),
         name=[re.compile(".+Keyboard")],  # "  Legion Controller for Windows  Keyboard"
         # capabilities={EC("EV_KEY"): [EC("KEY_1")]},
         # report_size=64,
         required=True,
     )
 
-    touch_actions = (
-        conf["touchpad.controller"]
-        if conf["touchpad.mode"].to(TouchpadAction) == "controller"
-        else conf["touchpad.emulation"]
-    )
     multiplexer = Multiplexer(
         trigger="analog_to_discrete",
         dpad="both",
-        led="main_to_sides",
-        status="both_to_main",
         share_to_qam=True,
         swap_guide="guide_is_select" if swap_legion else None,
-        touchpad_short=touch_actions["short"].to(TouchpadAction),
-        touchpad_right=touch_actions["hold"].to(TouchpadAction),
         select_reboots=conf["select_reboots"].to(bool),
-        r3_to_share=conf["m2_to_mute"].to(bool),
         nintendo_mode=conf["nintendo_mode"].to(bool),
         emit=emit,
-        imu=simu,
         params=d_params,
     )
 
@@ -344,19 +312,10 @@ def controller_loop_xinput(
     try:
         prepare(d_xinput)
         prepare(d_shortcuts)
-        if d_params["uses_touch"]:
-            if fix_hold:
-                # If fixing hold, only do touchpad
-                devs.append(d_touch)
-                d_touch.open()
-            else:
-                prepare(d_touch)
+        prepare(d_cfg)
         prepare(d_raw)
         for d in d_producers:
             prepare(d)
-
-        ts_count: dict[str, int] = {"left_imu_ts": 0, "right_imu_ts": 0}
-        ts_last: dict[str, int] = {"left_imu_ts": 0, "right_imu_ts": 0}
 
         logger.info("Emulated controller launched, have fun!")
         while not should_exit.is_set() and not updated.is_set():
@@ -372,37 +331,6 @@ def controller_loop_xinput(
                 if id(d) in to_run:
                     evs.extend(d.produce(r))
 
-            # Patch timestamps to convert them to ns
-            # for d in ('x', 'y', 'z'):
-            #     p = False
-            #     for ev in evs:
-            #         if f"accel_{d}" in ev["code"]:
-            #             print(
-            #                 f"{ev['code'].split('accel_')[1]}: {ev['value']:12.5e} ", end=""
-            #             )
-            #             p = True
-            #     if not p:
-            #         print(f"{d}:              ", end='')
-            # print()
-            for ev in evs:
-                if ev["type"] == "axis" and "_imu_ts" in ev["code"]:
-                    # Find diff between previous event
-                    last = ts_last[ev["code"]]
-                    curr = ev["value"]
-                    diff = curr - last
-                    if curr < last:
-                        diff += 256
-                    ts_last[ev["code"]] = curr
-                    # 8ms per count
-                    ts_count[ev["code"]] += diff * 8_000_000
-                    ev["value"] = ts_count[ev["code"]]
-                if ev["type"] == "axis" and "gyro" in ev["code"]:
-                    v = ev["value"]
-                    if (abs(v / 0.001065) // 1) in (254, 255):
-                        # Legion go controllers have a bug where they will
-                        # randomly output 254 or 255. If that happens, drop event
-                        ev["code"] = ""  # type: ignore
-
             evs = multiplexer.process(evs)
             if evs:
                 if debug:
@@ -410,6 +338,7 @@ def controller_loop_xinput(
 
                 d_xinput.consume(evs)
                 d_raw.consume(evs)
+                d_cfg.consume(evs)
 
             for d in d_outs:
                 d.consume(evs)
@@ -437,9 +366,7 @@ class SelectivePassthrough(Producer, Consumer):
         self,
         parent,
         forward_buttons: Sequence[Button] = ("share", "mode"),
-        passthrough: Sequence[Button] = list(
-            next(iter(LGO_RAW_INTERFACE_BTN_ESSENTIALS.values()))
-        ),
+        passthrough: Sequence[Button] = list(GOS_INTERFACE_BTN_ESSENTIALS.keys()),
         passthrough_pressed: bool = False,
     ):
         self.parent = parent
@@ -478,15 +405,11 @@ class SelectivePassthrough(Producer, Consumer):
                 else:
                     self.pressed_vals.discard(ev["code"])
 
-            if ev["type"] == "configuration":
-                out.append(ev)
-            elif ev["type"] == "button" and ev["code"] in self.passthrough:
+            if ev["type"] == "button" and ev["code"] in self.passthrough:
                 out.append(ev)
             elif ev["type"] == "axis" and (
                 "imu" in ev["code"] or "accel" in ev["code"] or "gyro" in ev["code"]
             ):
-                out.append(ev)
-            elif "touchpad" in ev["code"]:
                 out.append(ev)
 
         if passthrough:

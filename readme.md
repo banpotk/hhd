@@ -12,7 +12,7 @@
 <!-- [![]()]() -->
 
 # Handheld Daemon
-Handheld Daemon provides hardware enablement for Windows handhelds, so that they run correctly in Linux. It acts as a vendor interface replacement (e.g., Armoury Crate equivalent). It does fan curves, TDP controls, controller emulation including gyro, back buttons, and SteamOS shortcuts, and RGB remapping. All of this is through a gamescope overlay, accessible through double tapping the side menu button of the device, and a desktop app.
+Handheld Daemon provides hardware enablement for Windows handhelds, so that they run correctly in Linux. It acts as a vendor interface replacement (e.g., Armoury Crate equivalent), with fan curves, TDP controls, controller emulation including gyro, back buttons, and SteamOS shortcuts, and RGB remapping. All of this is through a gamescope overlay, accessible through double tapping the side menu button of the device, and a desktop app.
 
 ## Showcase
 ![Overlay](./docs/overlay.gif)
@@ -20,7 +20,9 @@ Handheld Daemon provides hardware enablement for Windows handhelds, so that they
 ## <a name="devices"></a>Supported Devices
 Handheld Daemon features great support for Lenovo, Asus, GPD, OneXPlayer, and Ayn. It also features some support for Ayaneo devices, Anbernic, and MSI. We aim to support new models by these manufacturers as they release, so if you don't see your device below, chances are it will still work or just needs to have its config included.
 
-- Legion Go
+- Lenovo Legion
+  - Go
+  - Go S
 - Asus ROG
   - Ally
   - Ally X
@@ -37,7 +39,7 @@ Handheld Daemon features great support for Lenovo, Asus, GPD, OneXPlayer, and Ay
   - Mini Pro
   - ONE XPLAYER
 - Ayn
-  - Loki Zero/Max
+  - Loki MiniPro/Zero/Max
 - Ayaneo
   - Air Standard/Plus/Pro
   - 1S/1S Limited
@@ -67,11 +69,9 @@ curl -L https://github.com/hhd-dev/hhd/raw/master/install.sh | bash
 
 This script does not automatically install system dependencies.
 A partial list for Ubuntu/Debian can be found [here](#debian).
-Then see [here](./kernel.md) for a partial list of kernel 
-patches. This includes `acpi_call` for TDP on devices other than the Ally.
-
-As Handheld Daemon matures, this list will continue to grow, so consider
-a gaming distro such as Bazzite for your gaming needs.
+This includes `acpi_call` for TDP on devices other than the Ally.
+For all devices, use the [bazzite kernel](https://github.com/hhd-dev/kernel-bazzite)
+for best support or Bazzite. Some caveats for certain devices are listed below.
 
 ### Uninstall
 We are sorry to see you go, use the following to uninstall:
@@ -89,8 +89,6 @@ sudo systemctl start hhd_local@$(whoami)
 ```
 
 ### <a name="issues"></a>After Install Instructions
-For all devices, use the [bazzite kernel](https://github.com/hhd-dev/kernel-bazzite)
-for best support or Bazzite. Some caveats for certain devices are listed below.
 
 #### Extra steps for ROG Ally
 You can hold the ROG Crate button to switch to the ROG Ally's Mouse mode to turn
@@ -230,13 +228,15 @@ pybabel extract --no-location -F i18n/babel.cfg -o i18n/hhd.pot src/hhd
 # Assuming adjustor is in an adjacent directory
 pybabel extract --no-location -F i18n/babel.cfg -o i18n/adjustor.pot ../adjustor/src/adjustor
 
+YOUR_LANG=el
+
 # Generate PO files for your language if they do not exist
-pybabel init -i i18n/hhd.pot -d i18n -D hhd -l YOUR_LANG
-pybabel init -i i18n/adjustor.pot -d i18n -D adjustor -l YOUR_LANG
+pybabel init -i i18n/hhd.pot -d i18n -D hhd -l $YOUR_LANG
+pybabel init -i i18n/adjustor.pot -d i18n -D adjustor -l $YOUR_LANG
 
 # Update current PO files for your language
-pybabel update -i i18n/hhd.pot -d i18n -D hhd -l YOUR_LANG
-pybabel update -i i18n/adjustor.pot -d i18n -D adjustor -l YOUR_LANG
+pybabel update -i i18n/hhd.pot -d i18n -D hhd -l $YOUR_LANG
+pybabel update -i i18n/adjustor.pot -d i18n -D adjustor -l $YOUR_LANG
 ```
 
 ### Creating a Local Repo version

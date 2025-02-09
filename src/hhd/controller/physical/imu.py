@@ -117,7 +117,30 @@ def prepare_dev(
         for a, f in zip(attr, freq):
             sfn = os.path.join(sensor_dir, f"in_{a}_sampling_frequency")
             if os.path.isfile(sfn):
-                write_sysfs(sensor_dir, f"in_{a}_sampling_frequency", f)
+                try:
+                    write_sysfs(sensor_dir, f"in_{a}_sampling_frequency", f)
+                except Exception as e:
+                    logger.error(f"Could not set sampling frequency for {a}:\n{e}")
+                    try:
+                        # Select closest higher frequency instead
+                        sfn = os.path.join(
+                            sensor_dir, f"in_{a}_sampling_frequency_available"
+                        )
+                        if os.path.isfile(sfn):
+                            freqs = map(
+                                float,
+                                read_sysfs(
+                                    sensor_dir, f"in_{a}_sampling_frequency_available"
+                                ).split(),
+                            )
+                            f = next((x for x in freqs if x >= f), None)
+                            if f:
+                                write_sysfs(sensor_dir, f"in_{a}_sampling_frequency", f)
+                                logger.info(
+                                    f"Selected higher sampling frequency {f} for {a}"
+                                )
+                    except Exception as e:
+                        logger.error(f"Could not set higher sampling frequency for {a}:\n{e}")
 
     # Set scale
     if scales is not None:

@@ -30,13 +30,17 @@ LONGER_ERROR_MARGIN = 1.3
 
 logger = logging.getLogger(__name__)
 
-GPD_WIN_4_VID = 0x2F24
-GPD_WIN_4_PID = 0x0135
+# Old devices were 2f24:0135
+# New 2025 Win mini uses 045e:002d
+GPD_WIN_VIDS = [0x2F24, 0x045e]
+GPD_WIN_PIDS = [0x0135, 0x002d]
 GAMEPAD_VID = 0x045E
 GAMEPAD_PID = 0x028E
 
+# Win Max 2
 TOUCHPAD_VID = 0x093A
 TOUCHPAD_PID = 0x0255
+# Win Minis
 TOUCHPAD_VID_2 = 0x0911
 TOUCHPAD_PID_2 = 0x5288
 
@@ -184,8 +188,7 @@ def plugin_run(
                 LONGER_ERROR_DELAY if repeated_fail and failed_fast else ERROR_DELAY
             )
             repeated_fail = failed_fast
-            logger.error(f"Received the following error:\n{type(e)}: {e}")
-            logger.error(
+            logger.exception(
                 f"Assuming controllers disconnected, restarting after {sleep_time}s."
             )
             # Raise exception
@@ -247,8 +250,8 @@ def controller_loop(
 
     # Vendor
     d_kbd_1 = BackbuttonsEvdev(
-        vid=[GPD_WIN_4_VID],
-        pid=[GPD_WIN_4_PID],
+        vid=GPD_WIN_VIDS,
+        pid=GPD_WIN_PIDS,
         capabilities={EC("EV_KEY"): [EC("KEY_SYSRQ"), EC("KEY_PAUSE")]},
         required=True,
         grab=True,

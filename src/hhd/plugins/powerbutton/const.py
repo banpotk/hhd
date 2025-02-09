@@ -19,13 +19,19 @@ PBC = PowerButtonConfig
 
 SUPPORTED_DEVICES: Sequence[PowerButtonConfig] = [
     PBC("Legion Go", "83E1"),
+    PBC("Legion Go S Z2 Go", "83L3"),
+    PBC("Legion Go S Z1E", "83N6"),
+    PBC("Legion Go S", "83Q2"),
+    PBC("Legion Go S", "83Q3"),
     PBC("ROG Ally", "ROG Ally RC71L_Action"),
     PBC("ROG Ally", "ROG Ally RC71L_RC71L"),
     PBC("ROG Ally", "ROG Ally RC71L"),
     PBC("ROG Ally X", "ROG Ally X RC72LA"),
     PBC("GPT Win 4", "G1618-04"),
     PBC("GPD Win Mini", "G1617-01"),
-    PBC("GPD Win Max 2 2023", "G1619-05"),
+    PBC("GPD Win Mini", "G1617-02"),
+    PBC("GPD Win Max 2", "G1619-04"),
+    PBC("GPD Win Max 2", "G1619-05"),
     PBC("OrangePi G1621-02/G1621-02", "G1621-02"),
     PBC("OrangePi NEO-01/NEO-01", "NEO-01"),
     # breaks volume buttons, use the valve original script and hope steam inhibits systemd
@@ -63,6 +69,12 @@ SUPPORTED_DEVICES: Sequence[PowerButtonConfig] = [
         "TECNO (Displayless)",
         "Pocket Go",
         type="only_press",
+    ),
+    PBC(
+        "MSI Claw 8",
+        "Claw 8 AI+ A2VM",
+        type="only_press",
+        phys=["LNXPWRBN"],
     ),
 ]
 
