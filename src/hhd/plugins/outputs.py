@@ -38,6 +38,7 @@ def get_outputs(
     rgb_modes: Mapping[RgbMode, Sequence[RgbSettings]] | None = None,
     rgb_zones: RgbZones = "mono",
     controller_disabled: bool = False,
+    touchpad_enable: Literal["disabled", "gamemode", "always"] | None = None,
 ) -> tuple[Sequence[Producer], Sequence[Consumer], Mapping[str, Any]]:
     producers = []
     consumers = []
@@ -50,6 +51,10 @@ def get_outputs(
         correction = touch_conf["controller.correction"].to(TouchpadCorrectionType)
         if touchpad in ("emulation", "controller"):
             desktop_disable = touch_conf[touchpad]["desktop_disable"].to(bool)
+    elif touchpad_enable:
+        touchpad = "disabled" if touchpad_enable == "disabled" else "controller"
+        correction = "legos"  # todo: make generic
+        desktop_disable = touchpad_enable == "gamemode"
     else:
         touchpad = "controller"
         correction = "stretch"
@@ -117,6 +122,7 @@ def get_outputs(
         case "uinput" | "xbox_elite" | "joycon_pair" | "hori_steam":
             Dualsense.close_cached()
             version = 1
+            sync_gyro = False
             paddles_as = conf.get("uinput.paddles_as", "noob")
             if controller == "joycon_pair":
                 theme = "joycon_pair"
@@ -131,6 +137,7 @@ def get_outputs(
                 button_map = HORIPAD_STEAM_BUTTON_MAP
                 bus = 0x06
                 version = 0
+                sync_gyro = conf.get("hori_steam.sync_gyro", True)
                 has_qam = True
             elif controller == "xbox_elite" or (
                 controller == "uinput" and paddles_as == "steam_input"
@@ -161,6 +168,7 @@ def get_outputs(
                 bus=bus,
                 version=version,
                 cache=True,
+                sync_gyro=sync_gyro and motion,
             )
             producers.append(d)
             consumers.append(d)

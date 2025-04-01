@@ -17,8 +17,11 @@ from .const import (
     GOS_INTERFACE_AXIS_MAP,
     GOS_INTERFACE_BTN_ESSENTIALS,
     GOS_INTERFACE_BTN_MAP,
+    GOS_TOUCHPAD_BUTTON_MAP,
+    GOS_TOUCHPAD_AXIS_MAP,
 )
 from .hid import LegionHidraw, LegionHidrawTs, rgb_callback
+
 
 FIND_DELAY = 0.1
 ERROR_DELAY = 0.5
@@ -157,6 +160,7 @@ def controller_loop_rest(
             axis_map={None: GOS_INTERFACE_AXIS_MAP},
             btn_map={None: GOS_INTERFACE_BTN_MAP},
             required=True,
+            motion=False,
         ),
         passthrough_pressed=True,
     )
@@ -223,12 +227,13 @@ def controller_loop_xinput(
     debug = DEBUG_MODE
 
     # Output
-
+    touchpad_enable = "disabled"  # conf.get("touchpad", "disabled")
     d_producers, d_outs, d_params = get_outputs(
         conf["xinput"],
         None,
         conf["imu"].to(bool),
         emit=emit,
+        touchpad_enable=touchpad_enable,  # type: ignore
         rgb_modes={
             "disabled": [],
             "solid": ["color"],
@@ -258,8 +263,26 @@ def controller_loop_xinput(
             axis_map={None: GOS_INTERFACE_AXIS_MAP},
             btn_map={None: GOS_INTERFACE_BTN_MAP},
             required=True,
+            motion=d_params.get("uses_motion", True),
         )
     )
+
+    uses_touch = d_params.get("uses_touch", False)
+    d_touch = GenericGamepadEvdev(
+        vid=[GOS_VID],
+        pid=list(GOS_PIDS),
+        capabilities={
+            EC("EV_KEY"): [EC("BTN_LEFT")],
+            EC("EV_ABS"): [EC("ABS_MT_POSITION_Y")],
+        },
+        btn_map=GOS_TOUCHPAD_BUTTON_MAP,
+        axis_map=GOS_TOUCHPAD_AXIS_MAP,
+        aspect_ratio=1,
+        required=True,
+    )
+
+    freq = conf.get("freq", None)
+    os = conf.get("mapping.mode", None)
     d_cfg = LegionHidraw(
         vid=[GOS_VID],
         pid=list(GOS_PIDS),
@@ -269,7 +292,13 @@ def controller_loop_xinput(
         interface=3,
         callback=rgb_callback,
         required=True,
-    ).with_settings(reset=reset)
+    ).with_settings(
+        reset=reset,
+        os=os,
+        turbo=conf.get("mapping.windows.turbo", None) if os == "windows" else None,
+        freq=freq,
+        touchpad="absolute" if uses_touch else "relative",
+    )
 
     # Mute keyboard shortcuts, mute
     d_shortcuts = GenericGamepadEvdev(
@@ -293,7 +322,7 @@ def controller_loop_xinput(
     )
 
     REPORT_FREQ_MIN = 25
-    REPORT_FREQ_MAX = 500
+    REPORT_FREQ_MAX = 1000 if freq == "1000hz" else 500
 
     REPORT_DELAY_MAX = 1 / REPORT_FREQ_MIN
     REPORT_DELAY_MIN = 1 / REPORT_FREQ_MAX
@@ -312,6 +341,8 @@ def controller_loop_xinput(
     try:
         prepare(d_xinput)
         prepare(d_shortcuts)
+        if uses_touch:
+            prepare(d_touch)
         prepare(d_cfg)
         prepare(d_raw)
         for d in d_producers:

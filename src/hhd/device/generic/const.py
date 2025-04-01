@@ -30,13 +30,11 @@ ANBERNIC_MAPPINGS: dict[int, str] = {
     B("KEY_G"): "mode",
 }
 
-MSI_CLAW_MAPPINGS = {
-    B("KEY_VOLUMEUP"): "key_volumeup",
-    B("KEY_VOLUMEDOWN"): "key_volumedown",
-    B("KEY_F15"): "mode",
-    B("KEY_F16"): "share",
+ZOTAC_ZONE_MAPPINGS = {
+    # ctrl start f17/f18
+    B("KEY_F17"): "mode",
+    B("KEY_F18"): "share",
 }
-
 
 TECNO_BTN_MAPPINGS = {
     B("KEY_VOLUMEUP"): "key_volumeup",
@@ -159,30 +157,12 @@ CONFS = {
         **AYA_DEFAULT_CONF,
     },
     "KUN": {"name": "AYANEO 2021 Kun", **AYA_DEFAULT_CONF},
+    "AYANEO KUN": {"name": "AYANEO Kun", **AYA_DEFAULT_CONF},
     # Anbernic
     "Win600": {
         "name": "Anbernic Win600",
         "btn_mapping": ANBERNIC_MAPPINGS,
         "extra_buttons": "none",
-    },
-    # MSI Claw
-    "Claw A1M": {
-        "name": "MSI Claw (1st gen)",
-        # "hrtimer": True, Uses sensor fusion garbage? From intel? Will need custom work
-        "extra_buttons": "none",
-        "btn_mapping": MSI_CLAW_MAPPINGS,
-        "claw": True,
-        "type": "claw",
-        "display_gyro": False,
-    },
-    # MSI Claw 8
-    "Claw 8 AI+ A2VM": {
-        "name": "MSI Claw 8",
-        "extra_buttons": "none",
-        "btn_mapping": MSI_CLAW_MAPPINGS,
-        "claw": True,
-        "type": "claw",
-        "display_gyro": False,
     },
     # TECNO
     "Pocket Go": {
@@ -190,6 +170,15 @@ CONFS = {
         "extra_buttons": "none",
         "btn_mapping": TECNO_BTN_MAPPINGS,
         "type": "tecno",
+        "display_gyro": False,
+    },
+    # Zotac Zone 1st Gen
+    # board name: G0A1W
+    "ZOTAC GAMING ZONE": {
+        "name": "Zotac Gaming Zone (1st gen)",
+        "extra_buttons": "none",  # not yet
+        "btn_mapping": ZOTAC_ZONE_MAPPINGS,
+        "type": "zotac",
         "display_gyro": False,
     },
 }

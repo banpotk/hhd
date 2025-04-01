@@ -44,6 +44,11 @@ RPM_OSTREE_RESET = [
     "reset",
 ]
 
+RPM_OSTREE_UPDATE = [
+    "rpm-ostree",
+    "update",
+]
+
 BOOTC_CHECK_CMD = [
     BOOTC_PATH,
     "update",
@@ -163,7 +168,7 @@ def _bootc_progress_reader(fd, emit, friendly, lock, obj):
                     value = start + min(length, int((curr / total) * length))
                     unit = f" {friendly} ({curr/1e9:.1f}/{total/1e9 + 0.099:.1f} GB)"
                 case _:
-                    value = None  # indeterminate
+                    continue
 
             with lock:
                 obj.update({"text": text, "value": value, "unit": unit})
@@ -237,6 +242,7 @@ class BootcPlugin(HHDPlugin):
         self.staged = ""
         self.cached_version = ""
         self.emit = None
+        self.updating = False
 
         self.branches = {}
         for branch in BRANCHES.split(","):
@@ -248,16 +254,16 @@ class BootcPlugin(HHDPlugin):
         self.state: STAGES = "init"
 
     def settings(self) -> HHDSettings:
-        if self.enabled:
-            sets = {"updates": {"bootc": load_relative_yaml("settings.yml")}}
+        sets = {
+            "updates": {"bootc": load_relative_yaml("settings.yml")},
+            "hhd": {"settings": load_relative_yaml("general.yml")},
+        }
 
-            sets["updates"]["bootc"]["children"]["stage"]["modes"]["rebase"][
-                "children"
-            ]["branch"]["options"] = self.branches
+        sets["updates"]["bootc"]["children"]["stage"]["modes"]["rebase"][
+            "children"
+        ]["branch"]["options"] = self.branches
 
-            return sets
-        else:
-            return {}
+        return sets
 
     def open(
         self,
@@ -280,6 +286,7 @@ class BootcPlugin(HHDPlugin):
 
     def _init(self, conf: Config):
         self.status = get_bootc_status()
+        self.updating = False
 
         if is_incompatible(self.status):
             conf["updates.bootc.stage.mode"] = "incompatible"
@@ -370,7 +377,6 @@ class BootcPlugin(HHDPlugin):
             self.state = "ready"
             conf[f"updates.bootc.update"] = cached_version
             conf[f"updates.bootc.steamos-update"] = "has-update"
-            conf["updates.bootc.steamos-target"] = None
         elif self.get_version("staged"):
             conf["updates.bootc.stage.mode"] = "ready_updated"
             self.state = "ready_updated"
@@ -413,48 +419,23 @@ class BootcPlugin(HHDPlugin):
                 reboot = conf.get_action(f"updates.bootc.stage.{e}.reboot")
 
                 steamos = conf.get("updates.bootc.steamos-update", None)
-                target = conf.get("updates.bootc.steamos-target", None)
-                if target and (target not in BRANCHES or target == self.branch_name):
-                    target = None
 
                 # Handle steamos polkit
-                steamos_upd = False
                 if steamos == "check":
-                    if target or e == "ready":
+                    if not conf.get("hhd.settings.bootc_steamui", True):
+                        # Updates are disabled, return that there are none
+                        conf["updates.bootc.steamos-update"] = "ready"
+                    elif e == "ready":
                         conf["updates.bootc.steamos-update"] = "has-update"
+                    elif e == "ready_rebased":
+                        # Make sure nothing funny happens on the rebase dialog
+                        conf["updates.bootc.steamos-update"] = "ready"
                     else:
                         update = True
-                        steamos_upd = True
                 if steamos == "apply":
-                    if target or e == "ready":
-                        update = True
-                        steamos_upd = True
+                    update = True
 
-                if steamos_upd and target:
-                    curr = get_ref_from_status(self.status)
-                    next_ref = (
-                        (curr[: curr.rindex(":")] if ":" in curr else curr)
-                        + ":"
-                        + target
-                    )
-                    if next_ref == curr:
-                        conf["updates.bootc.steamos-target"] = None
-                        self._init(conf)
-                    self.state = "loading_cancellable"
-                    cmd = [BOOTC_PATH, "switch", next_ref]
-                    if self.bootc_progress:
-                        self.proc, self.progress = run_command_threaded_progress(
-                            cmd, self.emit, target, self.progress_lock
-                        )
-                    else:
-                        self.proc = run_command_threaded(cmd)
-                    conf["updates.bootc.stage.mode"] = "loading_cancellable"
-                    conf["updates.bootc.stage.loading_cancellable.progress"] = {
-                        "text": _("Rebasing to "),
-                        "unit": self.branches.get(target, target),
-                        "value": None,
-                    }
-                elif update:
+                if update:
                     if e == "ready_rebased" and self.branch_ref:
                         self.checked_update = False
                         self.state = "loading_cancellable"
@@ -479,6 +460,7 @@ class BootcPlugin(HHDPlugin):
                     elif e == "ready":
                         self.state = "loading_cancellable"
                         self.checked_update = False
+                        self.updating = True
                         if self.bootc_progress:
                             self.proc, self.progress = run_command_threaded_progress(
                                 BOOTC_UPDATE_CMD,
@@ -652,9 +634,23 @@ class BootcPlugin(HHDPlugin):
                 )
                 if self.proc is None:
                     self._init(conf)
-                elif self.proc.poll() is not None:
-                    self._init(conf)
-                    self.proc = None
+                elif exit := self.proc.poll() is not None:
+                    if exit and self.updating:
+                        logger.error(
+                            f"Command failed with exit code {exit}. Fallback to rpm-ostree"
+                        )
+                        self.proc = run_command_threaded(RPM_OSTREE_UPDATE)
+                        conf["updates.bootc.stage.loading_cancellable.progress"] = {
+                            "text": _("Update error. Using alternative method... "),
+                            "value": None,
+                            "unit": None,
+                        }
+
+                        # Prevent fallback running forever
+                        self.updating = False
+                    else:
+                        self._init(conf)
+                        self.proc = None
                 elif cancel:
                     logger.info("User cancelled update. Stopping...")
                     self.proc.send_signal(signal.SIGINT)
@@ -697,7 +693,7 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
 
     if not BOOTC_ENABLED:
         return []
-    
+
     if not shutil.which(BOOTC_PATH):
         logger.warning("Bootc is enabled but not found in path.")
         return []
