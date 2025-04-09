@@ -115,6 +115,15 @@ def plugin_run(
                             usage=XFLY_USAGE,
                         )
                     )
+                case "hid_v1_g1":
+                    found_vendor = bool(
+                        enumerate_unique(
+                            vid=XFLY_VID,
+                            pid=XFLY_PID,
+                            usage_page=XFLY_PAGE,
+                            usage=XFLY_USAGE,
+                        )
+                    )
                 case "mixed":
                     found_vendor = bool(
                         enumerate_unique(
@@ -196,8 +205,17 @@ def find_vendor(prepare, turbo, protocol: str | None):
         turbo=turbo,
         required=True,
     )
+    d_hidraw_g1 = OxpHidraw(
+        vid=[XFLY_VID],
+        pid=[XFLY_PID],
+        usage_page=[XFLY_PAGE],
+        usage=[XFLY_USAGE],
+        turbo=turbo,
+        required=True,
+        g1=True,
+    )
 
-    if not protocol or protocol in ["serial", "mixed"]:
+    if protocol in ["serial", "mixed"]:
         try:
             prepare(d_ser)
             # OneXFly uses serial only for the buttons and hidraw for RGB
@@ -218,7 +236,7 @@ def find_vendor(prepare, turbo, protocol: str | None):
         except Exception as e:
             pass
 
-    if not protocol or protocol == "hid_v1":
+    if protocol == "hid_v1":
         try:
             prepare(d_hidraw)
             logger.info("Found OXP V1 hidraw vendor device.")
@@ -226,7 +244,15 @@ def find_vendor(prepare, turbo, protocol: str | None):
         except Exception as e:
             pass
 
-    if not protocol or protocol == "hid_v2":
+    if protocol == "hid_v1_g1":
+        try:
+            prepare(d_hidraw_g1)
+            logger.info("Found OXP V1 hidraw vendor device.")
+            return [d_hidraw_g1]
+        except Exception as e:
+            pass
+
+    if protocol == "hid_v2":
         try:
             prepare(d_hidraw_v2)
             logger.info("Found OXP V2 hidraw vendor device.")
@@ -465,6 +491,16 @@ def controller_loop(
         grab=True,
         btn_map=mappings,
     )
+    # Touchpad keyboard
+    d_kbd_2 = GenericGamepadEvdev(
+        vid=[0x6080],
+        pid=[0x8060],
+        required=True,
+        grab=False,
+        btn_map=BTN_MAPPINGS,
+        capabilities={EC("EV_KEY"): [EC("KEY_D")]},
+        requires_start=True,
+    )
 
     share_reboots = False
     keyboard_is = "keyboard"
@@ -547,6 +583,8 @@ def controller_loop(
     try:
         d_vend = find_vendor(prepare, turbo, dconf.get("protocol", None))
         d_vend_id = [id(d) for d in d_vend]
+        if dconf.get("g1", False):
+            prepare(d_kbd_2)
         prepare(d_xinput)
         if motion:
             start_imu = True

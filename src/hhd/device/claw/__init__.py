@@ -29,6 +29,7 @@ class ClawControllerPlugin(HHDPlugin):
         self.t = None
         self.should_exit = None
         self.updated = Event()
+        self.woke_up = Event()
         self.started = False
         self.t = None
 
@@ -44,6 +45,14 @@ class ClawControllerPlugin(HHDPlugin):
         self.emit = emit
         self.context = context
         self.prev = None
+
+        # FIXME: move this somewhere else
+        try:
+            with open("/sys/bus/serio/devices/serio0/power/wakeup", "w") as f:
+                f.write("disabled")
+            logger.warning("Disabling keyboard wakeups so volume button does not wake device.")
+        except Exception as e:
+            logger.error(f"Failed to disable keyboard wakeup wakeup: {e}")
 
     def settings(self) -> HHDSettings:
         base = {"controllers": {"claw": load_relative_yaml("controllers.yml")}}
@@ -88,6 +97,7 @@ class ClawControllerPlugin(HHDPlugin):
                 self.should_exit,
                 self.updated,
                 self.dconf,
+                self.woke_up,
             ),
         )
         self.t.start()
@@ -99,6 +109,11 @@ class ClawControllerPlugin(HHDPlugin):
         self.t.join()
         self.should_exit = None
         self.t = None
+    
+    def notify(self, events: Sequence):
+        for ev in events:
+            if ev["type"] == "special" and ev.get("event", None) == "wakeup":
+                self.woke_up.set()
 
 
 def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
@@ -107,7 +122,7 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
 
     # Match just product name
     # if a device exists here its officially supported
-    with open("/sys/devices/virtual/dmi/id/product_name") as f:
+    with open("/sys/devices/virtual/dmi/id/board_name") as f:
         dmi = f.read().strip()
 
     dconf = CONFS.get(dmi, None)
@@ -115,6 +130,6 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
         return [ClawControllerPlugin(dmi, dconf)]
 
     if os.environ.get("HHD_FORCE_CLAW", "0") == "1":
-        return [ClawControllerPlugin("forced", CONFS["Claw 8 AI+ A2VM"])]
+        return [ClawControllerPlugin("forced", CONFS["MS"])]
 
     return []
