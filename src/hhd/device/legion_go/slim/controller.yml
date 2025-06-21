@@ -15,13 +15,6 @@ children:
   #
   # Common settings
   #
-  imu:
-    type: bool
-    title: Motion Support
-    hint: >-
-      Enable gyroscope/accelerometer (IMU) support
-    default: True
-
   mapping:
     type: mode
     title: Mapping Style
@@ -57,17 +50,17 @@ children:
         hint: >-
           SteamOS style mapping.
 
-  # touchpad:
-  #   type: multiple
-  #   title: Touchpad Emulation
-  #   default: disabled
-  #   tags: [ non-essential, ordinal ]
-  #   hint: >-
-  #     Passthrough the touchpad to the controller (Dualsense only).
-  #   options:
-  #     disabled: Disabled
-  #     gamemode: Gamemode
-  #     always: Always
+  touchpad:
+    type: multiple
+    title: Touchpad Emulation [ALPHA]
+    default: disabled
+    tags: [ non-essential, ordinal ]
+    hint: >-
+      Passthrough the touchpad to the controller.
+    options:
+      disabled: Disabled
+      gamemode: Gamemode
+      always: Always
     
   freq:
     type: multiple

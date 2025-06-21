@@ -29,27 +29,41 @@ LONGER_ERROR_MARGIN = 1.3
 
 logger = logging.getLogger(__name__)
 
-CLAW_SET_M1 = bytes(
-    [0x0F, 0x00, 0x00, 0x3C, 0x21, 0x01, 0x00, 0x7A, 0x05, 0x01, 0x00, 0x00, 0x11, 0x00]
-)
-CLAW_SET_M2 = bytes(
-    [0x0F, 0x00, 0x00, 0x3C, 0x21, 0x01, 0x01, 0x1F, 0x05, 0x01, 0x00, 0x00, 0x12, 0x00]
+CLAW_SET_M1M2 = lambda a, btn: bytes(
+    [0x0F, 0x00, 0x00, 0x3C, 0x21, 0x01, *a[btn], 0x05, 0x01, 0x00, 0x00, 0x12, 0x00]
 )
 CLAW_SYNC_ROM = bytes([0x0F, 0x00, 0x00, 0x3C, 0x22])
+
 CLAW_SET_DINPUT = bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x02, 0x00])
 CLAW_SET_MSI = bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x03, 0x00])
+CLAW_SET_DESKTOP = bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x04, 0x00])
 
 MSI_CLAW_VID = 0x0DB0
 MSI_CLAW_XINPUT_PID = 0x1901
 MSI_CLAW_DINPUT_PID = 0x1902
+MSI_CLAW_TEST_PID = 0x1903
 
 KBD_VID = 0x0001
 KBD_PID = 0x0001
 
 BACK_BUTTON_DELAY = 0.1
 
+# 0211
+ADDR_0163 = {
+    "rgb": [0x01, 0xFA],
+    "m1": [0x00, 0x7A],
+    "m2": [0x01, 0x1F],
+}
+# 0217
+ADDR_0166 = {
+    "rgb": [0x02, 0x4A],
+    "m1": [0x00, 0xBA],
+    "m2": [0x01, 0x63],
+}
+ADDR_DEFAULT = ADDR_0163
 
-def set_rgb_cmd(brightness, red, green, blue):
+
+def set_rgb_cmd(brightness, red, green, blue, addr: dict = ADDR_DEFAULT) -> bytes:
     return bytes(
         [
             # Preamble
@@ -61,8 +75,7 @@ def set_rgb_cmd(brightness, red, green, blue):
             0x21,
             0x01,
             # Start at
-            0x01,
-            0xFA,
+            *addr["rgb"],
             # Write 31 bytes
             0x20,
             # Index, Frame num, Effect, Speed, Brightness
@@ -77,9 +90,40 @@ def set_rgb_cmd(brightness, red, green, blue):
 
 class ClawDInputHidraw(GenericGamepadHidraw):
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, test_mode: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.init = False
+        self.test_mode = test_mode
+        self.addr = None
+
+    def open(self):
+        out = super().open()
+        if not out:
+            return out
+
+        if self.addr is None:
+            ver = (self.info or {}).get("release_number", 0x0)
+            major = ver >> 8
+            logger.info(f"Device version: {ver:#04x}")
+            if (major == 1 and ver >= 0x0166) or (major == 2 and ver >= 0x0217):
+                self.addr = ADDR_0166
+            else:
+                self.addr = ADDR_0163
+
+        return out
+
+    def write(self, cmd: bytes) -> None:
+        if not self.dev:
+            return
+
+        self.dev.write(cmd + bytes([0x00] * ((64 - len(cmd)) if len(cmd) < 64 else 0)))
+        logger.info(f"Sent command: {cmd.hex()}")
+        # # Receive ack
+        # for _ in range(10):
+        #     # 10 00 00 3c 06
+        #     cmd = self.dev.read(64)
+        #     if cmd and cmd[4] == 0x06:
+        #         break
 
     def consume(self, events: Sequence[Event]) -> None:
         if not self.dev:
@@ -97,26 +141,33 @@ class ClawDInputHidraw(GenericGamepadHidraw):
                         0x00,
                         min(255, int(ev["weak_magnitude"] * 255)),
                         min(255, int(ev["strong_magnitude"] * 255)),
+                        00,
+                        00,
+                        00,
+                        00,
+                        00,
                     ]
                 )
                 self.dev.write(cmd)
-            elif ev["type"] == "led":
+            elif ev["type"] == "led" and not self.test_mode:
                 if ev["mode"] == "solid":
                     cmd = set_rgb_cmd(
                         ev["brightness"],
                         ev["red"],
                         ev["green"],
                         ev["blue"],
+                        self.addr or ADDR_DEFAULT,
                     )
-                    self.dev.write(cmd)
+                    self.write(cmd)
                 elif ev["mode"] == "disabled":
                     cmd = set_rgb_cmd(
                         0,
                         0,
                         0,
                         0,
+                        self.addr or ADDR_DEFAULT,
                     )
-                    self.dev.write(cmd)
+                    self.write(cmd)
 
     def set_dinput_mode(self, init: bool = False) -> None:
         if not self.dev:
@@ -124,17 +175,18 @@ class ClawDInputHidraw(GenericGamepadHidraw):
 
         # Make sure M1/M2 are recognizable
         if init:
-            self.dev.write(CLAW_SET_M1)
             time.sleep(0.3)
-            self.dev.write(CLAW_SET_M2)
-            time.sleep(0.3)
-            self.dev.write(CLAW_SYNC_ROM)
-            time.sleep(0.3)
-            self.dev.write(CLAW_SET_MSI)
+            self.write(CLAW_SET_M1M2(self.addr or ADDR_DEFAULT, "m1"))
+            time.sleep(0.5)
+            self.write(CLAW_SET_M1M2(self.addr or ADDR_DEFAULT, "m2"))
+            time.sleep(0.5)
+            self.write(CLAW_SYNC_ROM)
+            time.sleep(0.5)
+            self.write(CLAW_SET_MSI)
             time.sleep(2)
 
         # Set the device to dinput mode
-        self.dev.write(CLAW_SET_DINPUT)
+        self.write(CLAW_SET_DINPUT)
 
 
 DINPUT_BUTTON_MAP: dict[int, GamepadButton] = to_map(
@@ -206,6 +258,7 @@ def plugin_run(
             found_device = bool(
                 enumerate_evs(vid=MSI_CLAW_VID, pid=MSI_CLAW_DINPUT_PID)
             )
+            test_mode = bool(enumerate_evs(vid=MSI_CLAW_VID, pid=MSI_CLAW_TEST_PID))
         except Exception:
             logger.warning("Failed finding device, skipping check.")
             time.sleep(LONGER_ERROR_DELAY)
@@ -229,7 +282,7 @@ def plugin_run(
                 logger.error(f"Failed to set device into dinput mode.\n{type(e)}: {e}")
                 time.sleep(1)
 
-        if not found_device:
+        if not found_device and not test_mode:
             if first:
                 logger.info("Controller not found. Waiting...")
             time.sleep(FIND_DELAY)
@@ -240,7 +293,15 @@ def plugin_run(
             logger.info("Launching emulated controller.")
             updated.clear()
             init = time.perf_counter()
-            controller_loop(conf.copy(), should_exit, updated, dconf, emit, woke_up)
+            controller_loop(
+                conf.copy(),
+                should_exit,
+                updated,
+                dconf,
+                emit,
+                woke_up,
+                test_mode=test_mode,
+            )
             repeated_fail = False
         except Exception as e:
             failed_fast = init + LONGER_ERROR_MARGIN > time.perf_counter()
@@ -286,9 +347,11 @@ def controller_loop(
     dconf: dict,
     emit: Emitter,
     woke_up: TEvent,
+    test_mode: bool = False,
 ):
     debug = DEBUG_MODE
 
+    logger.info(f"Test mode: {test_mode}")
     # Output
     d_producers, d_outs, d_params = get_outputs(
         conf["controller_mode"],
@@ -300,7 +363,7 @@ def controller_loop(
     # Inputs
     d_xinput = GenericGamepadEvdev(
         vid=[MSI_CLAW_VID],
-        pid=[MSI_CLAW_DINPUT_PID],
+        pid=[MSI_CLAW_DINPUT_PID, MSI_CLAW_TEST_PID],
         # name=["Generic X-Box pad"],
         capabilities={EC("EV_KEY"): [EC("BTN_A")]},
         required=True,
@@ -363,13 +426,26 @@ def controller_loop(
         output_timestamps=True,
     )
 
-    d_vend = ClawDInputHidraw(
-        vid=[MSI_CLAW_VID],
-        pid=[MSI_CLAW_DINPUT_PID],
-        usage_page=[0xFFF0],
-        usage=[0x0040],
-        required=True,
-    )
+    if test_mode:
+        d_vend = ClawDInputHidraw(
+            vid=[MSI_CLAW_VID],
+            pid=[MSI_CLAW_TEST_PID],
+            application=[
+                0xFFF00040,
+                0x00010005,
+                0xFF000000,
+            ],
+            required=True,
+            test_mode=True,
+        )
+    else:
+        d_vend = ClawDInputHidraw(
+            vid=[MSI_CLAW_VID],
+            pid=[MSI_CLAW_DINPUT_PID],
+            usage_page=[0xFFF0],
+            usage=[0x0040],
+            required=True,
+        )
 
     REPORT_FREQ_MIN = 25
     REPORT_FREQ_MAX = 400
@@ -392,8 +468,9 @@ def controller_loop(
         prepare(d_xinput)
         prepare(d_volume_btn)
         prepare(d_kbd_1)
-        prepare(d_kbd_2)
-        prepare(d_mouse)
+        if not test_mode:
+            prepare(d_kbd_2)
+            prepare(d_mouse)
         for d in d_producers:
             prepare(d)
         prepare(d_vend)
@@ -424,10 +501,9 @@ def controller_loop(
                 switch_to_dinput = None
             # elif woke_up.is_set():
             #     woke_up.clear()
-            #     # Switch to dinput after 4 seconds without input to avoid
-            #     # being stuck in desktop mode, as not all buttons trigger
-            #     # the other quirk (especially bumpers)
-            #     switch_to_dinput = time.perf_counter() + 4
+            #     # Switch to dinput after 2 seconds without input to avoid
+            #     # being stuck in desktop mode
+            #     switch_to_dinput = time.perf_counter() + 2
 
             evs = multiplexer.process(evs)
             if evs:

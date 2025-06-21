@@ -76,6 +76,7 @@ class OverlayPlugin(HHDPlugin):
         self.qam_handler_fallback = None
         self.touch_gestures = True
         self.ctx = None
+        self.emit = None
 
         self.images = None
         self.burnt_ids = set()
@@ -129,6 +130,19 @@ class OverlayPlugin(HHDPlugin):
         if not SUPPORTS_DPMS:
             del set["gamemode"]["gamescope"]["children"]["dpms"]
 
+        # Enable Armoury button only on ASUS laptops
+        try:
+            with open("/sys/devices/virtual/dmi/id/sys_vendor", "r") as f:
+                sys = f.read()
+            with open("/sys/devices/virtual/dmi/id/product_name", "r") as f:
+                name = f.read()
+
+            ARMOURY_BUTTON = "ASUSTeK COMPUTER INC" in sys and "ROG Ally" not in name
+        except Exception:
+            ARMOURY_BUTTON = False
+        if not ARMOURY_BUTTON:
+            del set["shortcuts"]["custom"]["children"]["armoury"]
+
         if get_touchscreen_quirk(None, None)[0] and not os.environ.get(
             "HHD_ALLOW_CORRECTION", None
         ):
@@ -145,6 +159,9 @@ class OverlayPlugin(HHDPlugin):
         return set
 
     def update(self, conf: Config):
+        if not self.emit:
+            return
+
         self.emit.set_simple_qam(not self.has_executable)
 
         # Load game information
@@ -191,6 +208,14 @@ class OverlayPlugin(HHDPlugin):
                 kbd = (
                     kbd or conf.get(f"shortcuts.keyboard.{v}", "disabled") != "disabled"
                 )
+
+            custom = False
+            for v in ("armoury",):
+                custom = (
+                    custom
+                    or conf.get(f"shortcuts.custom.{v}", "disabled") != "disabled"
+                )
+
             touch = False
             for v in ("bottom", "left_top", "left_bottom", "right_top", "right_bottom"):
                 touch = (
@@ -206,9 +231,9 @@ class OverlayPlugin(HHDPlugin):
             # if self.ovf:
             #     self.ovf.interceptionSupported = True
 
-            if kbd or touch or ctrl or disable_touch:
+            if kbd or custom or touch or ctrl or disable_touch:
                 logger.info(
-                    f"Starting shortcut loop with:\nkbd: {kbd}, touch: {touch}, ctrl: {ctrl}, disable_touch: {disable_touch}"
+                    f"Starting shortcut loop with:\nkbd: {kbd}, touch: {touch}, custom: {custom}, ctrl: {ctrl}, disable_touch: {disable_touch}"
                 )
                 self.short_should_exit = TEvent()
                 touch_correction = (
@@ -259,6 +284,10 @@ class OverlayPlugin(HHDPlugin):
                         # Cannot be used in big picture because KDE/GNOME
                         side = gesture[len("kbd_") :]
                         section = "keyboard"
+                    cmd = None
+                case gesture if gesture.startswith("custom_"):
+                    side = gesture[len("custom_") :]
+                    section = "custom"
                     cmd = None
                 case "xbox_b":
                     side = "xbox_b"
