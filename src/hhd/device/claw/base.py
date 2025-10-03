@@ -1,4 +1,5 @@
 import logging
+import re
 import select
 import time
 from threading import Event as TEvent
@@ -34,6 +35,7 @@ CLAW_SET_M1M2 = lambda a, btn: bytes(
 )
 CLAW_SYNC_ROM = bytes([0x0F, 0x00, 0x00, 0x3C, 0x22])
 
+CLAW_SET_XINPUT = bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x01, 0x00])
 CLAW_SET_DINPUT = bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x02, 0x00])
 CLAW_SET_MSI = bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x03, 0x00])
 CLAW_SET_DESKTOP = bytes([0x0F, 0x00, 0x00, 0x3C, 0x24, 0x04, 0x00])
@@ -43,10 +45,21 @@ MSI_CLAW_XINPUT_PID = 0x1901
 MSI_CLAW_DINPUT_PID = 0x1902
 MSI_CLAW_TEST_PID = 0x1903
 
+MSI_VENDOR_APPLICATIONS = [
+    0xFFF00040,
+    0x00010005,
+    0xFF000000,
+    0xFFA00001,
+]
+
 KBD_VID = 0x0001
 KBD_PID = 0x0001
 
+MSI_WMI_VID = 0x0000
+MSI_WMI_PID = 0x0000
+
 BACK_BUTTON_DELAY = 0.1
+BUTTON_MIN_DELAY = 0.13
 
 # 0211
 ADDR_0163 = {
@@ -54,13 +67,58 @@ ADDR_0163 = {
     "m1": [0x00, 0x7A],
     "m2": [0x01, 0x1F],
 }
+# 0166 0168
 # 0217
+# 0308 (?)
 ADDR_0166 = {
     "rgb": [0x02, 0x4A],
     "m1": [0x00, 0xBA],
     "m2": [0x01, 0x63],
 }
-ADDR_DEFAULT = ADDR_0163
+ADDR_DEFAULT = ADDR_0166
+
+
+class MsiAtKbd(GenericGamepadEvdev):
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            *args,
+            **kwargs,
+        )
+        self.state = {}
+        self.queued = []
+
+    def produce(self, fds):
+        evs = list(super().produce(fds))
+        curr = time.perf_counter()
+        skip = []
+
+        for i, ev in enumerate(evs):
+            if ev["type"] == "button" and ev["code"] in (
+                "mode",
+                "share",
+            ):
+                if ev["value"]:
+                    self.state[ev["code"]] = curr
+                else:
+                    t = self.state.pop(ev["code"], None)
+
+                    if t and curr - t < BUTTON_MIN_DELAY:
+                        self.queued.append((ev["code"], t + BUTTON_MIN_DELAY))
+                        skip.append(i)
+        
+        for i in reversed(skip):
+            evs.pop(i)
+
+        while self.queued and self.queued[0][1] < curr:
+            evs.append(
+                {
+                    "type": "button",
+                    "code": self.queued.pop(0)[0],
+                    "value": 0,
+                }  # type: ignore
+            )
+
+        return evs
 
 
 def set_rgb_cmd(brightness, red, green, blue, addr: dict = ADDR_DEFAULT) -> bytes:
@@ -105,7 +163,11 @@ class ClawDInputHidraw(GenericGamepadHidraw):
             ver = (self.info or {}).get("release_number", 0x0)
             major = ver >> 8
             logger.info(f"Device version: {ver:#04x}")
-            if (major == 1 and ver >= 0x0166) or (major == 2 and ver >= 0x0217):
+            if (
+                (major == 1 and ver >= 0x0166)
+                or (major == 2 and ver >= 0x0217)
+                or (major >= 3)
+            ):
                 self.addr = ADDR_0166
             else:
                 self.addr = ADDR_0163
@@ -169,12 +231,13 @@ class ClawDInputHidraw(GenericGamepadHidraw):
                     )
                     self.write(cmd)
 
-    def set_dinput_mode(self, init: bool = False) -> None:
+    def set_controller_mode(self, dinput: bool = False, init: bool = False) -> None:
         if not self.dev:
             return
 
-        # Make sure M1/M2 are recognizable
-        if init:
+        # Make sure M1/M2 are recognizable in dinput mode
+        # Otherwise dont remap them. So users can modify them in Windows
+        if init and dinput:
             time.sleep(0.3)
             self.write(CLAW_SET_M1M2(self.addr or ADDR_DEFAULT, "m1"))
             time.sleep(0.5)
@@ -185,8 +248,11 @@ class ClawDInputHidraw(GenericGamepadHidraw):
             self.write(CLAW_SET_MSI)
             time.sleep(2)
 
-        # Set the device to dinput mode
-        self.write(CLAW_SET_DINPUT)
+        if dinput:
+            # Set the device to dinput mode
+            self.write(CLAW_SET_DINPUT)
+        else:
+            self.write(CLAW_SET_XINPUT)
 
 
 DINPUT_BUTTON_MAP: dict[int, GamepadButton] = to_map(
@@ -240,6 +306,7 @@ def plugin_run(
 ):
     first = True
     first_disabled = True
+    initialized = False
     init = time.perf_counter()
     repeated_fail = False
     while not should_exit.is_set():
@@ -253,29 +320,34 @@ def plugin_run(
         else:
             first_disabled = True
 
+        use_dinput = conf.get("dinput_mode", False)
         try:
             is_xinput = bool(enumerate_evs(vid=MSI_CLAW_VID, pid=MSI_CLAW_XINPUT_PID))
-            found_device = bool(
-                enumerate_evs(vid=MSI_CLAW_VID, pid=MSI_CLAW_DINPUT_PID)
-            )
+            is_dinput = bool(enumerate_evs(vid=MSI_CLAW_VID, pid=MSI_CLAW_DINPUT_PID))
+            found_device = is_xinput or is_dinput
             test_mode = bool(enumerate_evs(vid=MSI_CLAW_VID, pid=MSI_CLAW_TEST_PID))
         except Exception:
             logger.warning("Failed finding device, skipping check.")
             time.sleep(LONGER_ERROR_DELAY)
             found_device = True
             is_xinput = False
+            is_dinput = False
 
-        if is_xinput:
+        if (
+            (is_xinput and use_dinput)
+            or (is_dinput and not use_dinput)
+            or (found_device and not test_mode and not initialized)
+        ):
             d_vend = ClawDInputHidraw(
                 vid=[MSI_CLAW_VID],
-                pid=[MSI_CLAW_XINPUT_PID],
-                usage_page=[0xFFA0],
-                usage=[0x0001],
+                pid=[MSI_CLAW_XINPUT_PID, MSI_CLAW_DINPUT_PID],
+                application=MSI_VENDOR_APPLICATIONS,
                 required=True,
             )
+            initialized = True
             try:
                 d_vend.open()
-                d_vend.set_dinput_mode(init=True)
+                d_vend.set_controller_mode(conf.get("dinput_mode", False), init=True)
                 d_vend.close(True)
                 time.sleep(2)
             except Exception as e:
@@ -301,6 +373,7 @@ def plugin_run(
                 emit,
                 woke_up,
                 test_mode=test_mode,
+                use_dinput=use_dinput,
             )
             repeated_fail = False
         except Exception as e:
@@ -348,6 +421,7 @@ def controller_loop(
     emit: Emitter,
     woke_up: TEvent,
     test_mode: bool = False,
+    use_dinput: bool = False,
 ):
     debug = DEBUG_MODE
 
@@ -358,22 +432,37 @@ def controller_loop(
         None,
         emit=emit,
         rgb_modes={"disabled": [], "solid": ["color"]},
+        extra_buttons=dconf.get("extra_buttons", "dual") if use_dinput else "none",
     )
 
     # Inputs
+    extra_args = {
+        "btn_map": DINPUT_BUTTON_MAP,
+        "axis_map": DINPUT_AXIS_MAP,
+        "postprocess": DINPUT_AXIS_POSTPROCESS,
+    }
     d_xinput = GenericGamepadEvdev(
         vid=[MSI_CLAW_VID],
-        pid=[MSI_CLAW_DINPUT_PID, MSI_CLAW_TEST_PID],
+        pid=[MSI_CLAW_XINPUT_PID, MSI_CLAW_DINPUT_PID, MSI_CLAW_TEST_PID],
         # name=["Generic X-Box pad"],
         capabilities={EC("EV_KEY"): [EC("BTN_A")]},
         required=True,
         hide=True,
-        btn_map=DINPUT_BUTTON_MAP,
-        axis_map=DINPUT_AXIS_MAP,
-        postprocess=DINPUT_AXIS_POSTPROCESS,
+        **(extra_args if use_dinput else {}),
     )
 
-    d_kbd_1 = GenericGamepadEvdev(
+    d_msi_wmi = MsiAtKbd(
+        vid=[MSI_WMI_VID],
+        pid=[MSI_WMI_PID],
+        name=[re.compile("^MSI.+")],
+        required=False,
+        grab=True,
+        capabilities={EC("EV_KEY"): [EC("KEY_F15")]},
+        btn_map=dconf.get("btn_mapping", MSI_CLAW_MAPPINGS),
+    )
+
+
+    d_kbd_1 = MsiAtKbd(
         vid=[KBD_VID],
         pid=[KBD_PID],
         required=False,
@@ -384,14 +473,14 @@ def controller_loop(
     # Mute these so after suspend we do not get stray keypresses
     d_kbd_2 = DesktopDetectorEvdev(
         vid=[MSI_CLAW_VID],
-        pid=[MSI_CLAW_DINPUT_PID],
+        pid=[MSI_CLAW_XINPUT_PID, MSI_CLAW_DINPUT_PID],
         required=False,
         grab=True,
         capabilities={EC("EV_KEY"): [EC("KEY_ESC")]},
     )
     d_mouse = DesktopDetectorEvdev(
         vid=[MSI_CLAW_VID],
-        pid=[MSI_CLAW_DINPUT_PID],
+        pid=[MSI_CLAW_XINPUT_PID, MSI_CLAW_DINPUT_PID],
         required=False,
         grab=True,
         capabilities={EC("EV_KEY"): [EC("BTN_MOUSE")]},
@@ -430,20 +519,15 @@ def controller_loop(
         d_vend = ClawDInputHidraw(
             vid=[MSI_CLAW_VID],
             pid=[MSI_CLAW_TEST_PID],
-            application=[
-                0xFFF00040,
-                0x00010005,
-                0xFF000000,
-            ],
+            application=MSI_VENDOR_APPLICATIONS,
             required=True,
             test_mode=True,
         )
     else:
         d_vend = ClawDInputHidraw(
             vid=[MSI_CLAW_VID],
-            pid=[MSI_CLAW_DINPUT_PID],
-            usage_page=[0xFFF0],
-            usage=[0x0040],
+            pid=[MSI_CLAW_DINPUT_PID, MSI_CLAW_XINPUT_PID],
+            application=MSI_VENDOR_APPLICATIONS,
             required=True,
         )
 
@@ -468,6 +552,7 @@ def controller_loop(
         prepare(d_xinput)
         prepare(d_volume_btn)
         prepare(d_kbd_1)
+        prepare(d_msi_wmi)
         if not test_mode:
             prepare(d_kbd_2)
             prepare(d_mouse)
@@ -496,14 +581,20 @@ def controller_loop(
             d_kbd_2.desktop = False
 
             if desktop_mode or (switch_to_dinput and start > switch_to_dinput):
-                logger.info("Setting controller to dinput mode.")
-                d_vend.set_dinput_mode()
+                logger.info(
+                    f"Setting controller to {'dinput' if use_dinput else 'xinput'} mode."
+                )
+                d_vend.set_controller_mode(dinput=use_dinput)
                 switch_to_dinput = None
             # elif woke_up.is_set():
             #     woke_up.clear()
             #     # Switch to dinput after 2 seconds without input to avoid
             #     # being stuck in desktop mode
             #     switch_to_dinput = time.perf_counter() + 2
+
+            # Read delayed events
+            evs.extend(d_kbd_1.produce([]))
+            evs.extend(d_msi_wmi.produce([]))
 
             evs = multiplexer.process(evs)
             if evs:

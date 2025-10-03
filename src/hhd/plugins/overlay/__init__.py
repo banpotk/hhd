@@ -9,7 +9,7 @@ from hhd.utils import expanduser
 
 from ..plugin import open_steam_kbd
 from .const import get_system_info, get_touchscreen_quirk
-from .controllers import QamHandlerKeyboard, device_shortcut_loop
+from .controllers import QamHandlerKeyboard, device_shortcut_loop, has_touchscreen
 from .steam import get_games
 from .x11 import is_gamescope_running
 
@@ -23,7 +23,7 @@ SUPPORTS_HALVING = os.environ.get("HHD_GS_STEAMUI_HALFHZ", "0") == "1"
 SUPPORTS_DPMS = os.environ.get("HHD_GS_DPMS", "0") == "1"
 
 
-def load_steam_games(ctx: Context, emit, burnt_ids: set):
+def load_steam_games(emit, burnt_ids: set):
     # Defer loading until we enter a game
     info = emit.info
     curr = info.get("game.id", None)
@@ -44,7 +44,7 @@ def load_steam_games(ctx: Context, emit, burnt_ids: set):
 
     try:
         # Load the games
-        games, images = get_games(expanduser("~/.local/share/Steam/appcache/", ctx))
+        games, images = get_games(expanduser("~/.local/share/Steam/appcache/", uid))
         logger.info(f"Loaded info for {len(games)} steam games.")
 
         # Add correct game data after refreshing the database (e.g., the user
@@ -75,8 +75,9 @@ class OverlayPlugin(HHDPlugin):
         self.qam_handler = None
         self.qam_handler_fallback = None
         self.touch_gestures = True
-        self.ctx = None
         self.emit = None
+        self.sdl_mappings = None
+        self.has_touchscreen = False
 
         self.images = None
         self.burnt_ids = set()
@@ -92,7 +93,6 @@ class OverlayPlugin(HHDPlugin):
             from .x11 import QamHandlerGamescope
 
             self.ovf = OverlayService(context, emit)
-            self.ctx = context
             self.has_executable = bool(find_overlay_exe(context))
 
             if bool(os.environ.get("HHD_QAM_KEYBOARD", None)):
@@ -142,6 +142,7 @@ class OverlayPlugin(HHDPlugin):
             ARMOURY_BUTTON = False
         if not ARMOURY_BUTTON:
             del set["shortcuts"]["custom"]["children"]["armoury"]
+            del set["shortcuts"]["custom"]["children"]["fan"]
 
         if get_touchscreen_quirk(None, None)[0] and not os.environ.get(
             "HHD_ALLOW_CORRECTION", None
@@ -156,6 +157,15 @@ class OverlayPlugin(HHDPlugin):
             ]["children"]["dmi"]["default"] = " - ".join(
                 map(lambda x: f'"{x}"', get_system_info())
             )
+
+        # Hide touchscreen shortcuts if we do not have a touchscreen
+        self.has_touchscreen = has_touchscreen()
+        if not self.has_touchscreen:
+            # If we do not have a touchscreen, remove the touchscreen shortcuts
+            del set["shortcuts"]["touchscreen"]
+            del set["gamemode"]["display"]
+            self.has_correction = False
+
         return set
 
     def update(self, conf: Config):
@@ -165,10 +175,10 @@ class OverlayPlugin(HHDPlugin):
         self.emit.set_simple_qam(not self.has_executable)
 
         # Load game information
-        if self.ctx:
-            games, images = load_steam_games(self.ctx, self.emit, self.burnt_ids)
-            if games and images:
-                self.emit.set_gamedata(games, images)
+        # TODO: Fix this when user binding is a thing
+        # games, images = load_steam_games(self.emit, self.burnt_ids)
+        # if games and images:
+        #     self.emit.set_gamedata(games, images)
         if FORCE_GAME:
             self.emit.info["game.id"] = FORCE_GAME
             self.emit.info["game.is_steam"] = False
@@ -193,11 +203,17 @@ class OverlayPlugin(HHDPlugin):
             conf["gamemode.display.touchscreen_disable"] = False
 
         asus_cycle = conf.get("tdp.asus.cycle_tdp", False)
-        if self.initialized and (
-            not self.old_shortcuts
-            or self.old_shortcuts != conf["shortcuts"]
-            or self.old_touch != disable_touch
-            or self.old_asus_cycle != asus_cycle
+        if (
+            self.initialized
+            and (
+                not self.old_shortcuts
+                or self.old_shortcuts != conf["shortcuts"]
+                or self.old_touch != disable_touch
+                or self.old_asus_cycle != asus_cycle
+            )
+            and (
+                self.emit and not self.emit.should_intercept()
+            )  # avoid breaking interception
         ):
             self.old_asus_cycle = asus_cycle
             self.old_shortcuts = conf["shortcuts"].copy()
@@ -243,6 +259,18 @@ class OverlayPlugin(HHDPlugin):
                     == "manual"
                     else None
                 )
+
+                if ctrl and not self.sdl_mappings:
+                    from .sdl import load_mappings
+
+                    try:
+                        self.sdl_mappings = load_mappings()
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not load SDL mappings, dinput gamepads may not map correctly: {e}"
+                        )
+                        self.sdl_mappings = None
+
                 self.short_t = Thread(
                     target=device_shortcut_loop,
                     args=(
@@ -254,6 +282,8 @@ class OverlayPlugin(HHDPlugin):
                         touch,
                         disable_touch,
                         touch_correction,
+                        self.sdl_mappings,
+                        conf.get("shortcuts.controller.allow_select", False),
                     ),
                 )
                 self.short_t.start()
@@ -271,7 +301,6 @@ class OverlayPlugin(HHDPlugin):
 
             side = None
             section = None
-            override_enable = False
             match ev["event"]:
                 case gesture if gesture.startswith("swipe_"):
                     if self.touch_gestures:
@@ -295,6 +324,12 @@ class OverlayPlugin(HHDPlugin):
                 case "xbox_y":
                     side = "xbox_y"
                     section = "controller"
+                case "xbox_a":
+                    side = "xbox_a"
+                    section = "controller"
+                case "xbox_b":
+                    side = "xbox_b"
+                    section = "controller"
                 case "qam_hold":
                     # Open QAM with hold for accessibility
                     cmd = "open_qam"
@@ -304,7 +339,6 @@ class OverlayPlugin(HHDPlugin):
                     # Preferred bind for QAM is dual press
                     cmd = "open_qam"
                 case "overlay":
-                    override_enable = True
                     cmd = "open_qam"
                 case "qam_triple":
                     # Allow opening expanded menu with tripple press
@@ -316,6 +350,7 @@ class OverlayPlugin(HHDPlugin):
                 logger.info(f"Gesture: {ev['event']}, section: {section}, key: {side}")
                 cmd_raw = self.old_shortcuts.get(f"{section}.{side}", "disabled")
                 cmd = None
+                assert self.emit
                 match cmd_raw:
                     case "disconnect":
                         d = ev.get("data", None)
@@ -336,16 +371,21 @@ class OverlayPlugin(HHDPlugin):
                     case "steam_qam":
                         logger.info("Opening steam qam.")
                         if (
-                            not self.emit.open_steam(False)
+                            self.emit
+                            and not self.emit.open_steam(False)
                             and self.qam_handler_fallback
                         ):
                             self.qam_handler_fallback(False)
                     case "steam_expanded":
                         logger.info("Opening steam expanded.")
-                        if not self.emit.open_steam(True) and self.qam_handler_fallback:
+                        if (
+                            self.emit
+                            and not self.emit.open_steam(True)
+                            and self.qam_handler_fallback
+                        ):
                             self.qam_handler_fallback(True)
                     case "keyboard":
-                        if open_steam_kbd(self.emit, True):
+                        if open_steam_kbd(True):
                             logger.info("Opened Steam keyboard.")
                         else:
                             logger.warning(
@@ -357,6 +397,9 @@ class OverlayPlugin(HHDPlugin):
                             getattr(self.qam_handler, "screenshot")()
                         elif self.qam_handler_fallback:
                             self.qam_handler_fallback.screenshot()
+                    case "tdp_cycle":
+                        logger.info("Cycling TDP.")
+                        self.emit({"type": "special", "event": "tdp_cycle"})
 
             if self.ovf and cmd:
                 init = "close" not in cmd

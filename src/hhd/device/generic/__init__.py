@@ -121,7 +121,7 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
     try:
         with open("/sys/devices/virtual/dmi/id/sys_vendor") as f:
             vendor = f.read().strip().lower()
-        if vendor == "ayn":
+        if vendor == "ayn" or vendor == "tectoy":
             return [GenericControllersPlugin(dmi, get_default_config(dmi, "AYN"))]
     except Exception:
         pass
@@ -131,7 +131,7 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
         with open("/sys/class/dmi/id/board_vendor") as f:
             vendor = f.read().lower().strip()
 
-        if "ayaneo" in vendor:
+        if "ayaneo" in vendor and 'AYANEO 3' not in dmi:
             return [GenericControllersPlugin(dmi, get_default_config(dmi, "AYA"))]
     except Exception:
         return []

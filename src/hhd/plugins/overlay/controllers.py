@@ -6,22 +6,23 @@ import struct
 import time
 from fcntl import ioctl
 from threading import RLock
-from typing import Any, Sequence
+from typing import Any, Sequence, Iterable
 import stat
 
 from evdev import InputDevice
 
 from hhd.controller import Event as ControllerEvent
-from hhd.controller.lib.ioctl import EVIOCSMASK, EVIOCGRABCLEAN
+from hhd.controller.lib.ioctl import EVIOCSMASK, EVIOCGRAB
 from hhd.controller.physical.evdev import B, list_evs, to_map
 from hhd.controller.virtual.uinput.monkey import UInput, UInputMonkey
+from hhd.utils import freeze_steam
 
 from .const import get_touchscreen_quirk
 from .x11 import is_gamescope_running
+from .sdl import BTN_GAMEPAD, match_gamepad, create_joystick_guid
 
 logger = logging.getLogger(__name__)
 
-ENHANCED_HIDING = bool(os.environ.get("HHD_EVIOC_IOCTL", False))
 
 REFRESH_INTERVAL = 0.1
 MONITOR_INTERVAL = 2
@@ -33,6 +34,8 @@ OVERLAY_BUTTON_MAP: dict[int, str] = to_map(
         "y": [B("BTN_Y")],
         "lb": [B("BTN_TL")],
         "rb": [B("BTN_TR")],
+        "mode": [B("BTN_MODE")],
+        "select": [B("BTN_SELECT")],
     }
 )
 OVERLAY_AXIS_MAP: dict[int, str] = to_map(
@@ -50,8 +53,10 @@ CONTROLLER_WAKE_BUTTON: dict[int, str] = to_map(
     {
         "select": [B("BTN_SELECT")],
         "mode": [B("BTN_MODE")],
+        "a": [B("BTN_A")],
         "b": [B("BTN_B")],
         "y": [B("BTN_Y")],
+        "x": [B("BTN_X")],
     }
 )
 
@@ -76,6 +81,7 @@ KEYBOARD_WAKE_KEY: dict[int, str] = to_map(
 CUSTOM_WAKE_KEY: dict[int, str] = to_map(
     {
         "armoury": [B("KEY_PROG3")],
+        "fan": [B("KEY_PROG4")],
     }
 )
 
@@ -176,9 +182,12 @@ class QamHandlerKeyboard:
             self.uinput = None
 
 
-def grab_buttons(fd: int, typ: int, btns: dict[int, str] | None):
+def grab_buttons(fd: int, typ: int, btns: Iterable[int] | None):
     if btns:
         b_len = max((max(btns) >> 3) + 1, 8)
+        # Align to long
+        if b_len % 8 != 0:
+            b_len += 8 - (b_len % 8)
         mask = bytearray(b_len)
         for b in btns:
             mask[b >> 3] |= 1 << (b & 0x07)
@@ -196,11 +205,47 @@ def grab_buttons(fd: int, typ: int, btns: dict[int, str] | None):
     # print(bytes(mask).hex())
 
 
+_is_ally = None
+
+
+def is_ally():
+    global _is_ally
+
+    if _is_ally is not None:
+        return _is_ally
+
+    try:
+        with open("/sys/devices/virtual/dmi/id/product_name", "r") as f:
+            product_name = f.read().strip().lower()
+            _is_ally = "ally" in product_name
+            return _is_ally
+    except Exception:
+        return False
+
+
+def has_touchscreen():
+    try:
+        for dev in list_evs():
+            keys = dev.get("byte", {}).get("key", bytes())
+            major = B("BTN_TOUCH") >> 3
+            minor = B("BTN_TOUCH") & 0x07
+            has_touch = len(keys) > major and keys[major] & (1 << minor)
+            major = B("BTN_TOOL_FINGER") >> 3
+            minor = B("BTN_TOOL_FINGER") & 0x07
+            has_finger = len(keys) > major and keys[major] & (1 << minor)
+            if has_touch and not has_finger:
+                return True
+    except Exception:
+        return True
+    return False
+
+
 def find_devices(
     current: dict[str, Any] = {},
     keyboard: bool = True,
     controllers: bool = True,
     touchscreens: bool = True,
+    sdl_mappings: Any | None = None,
 ):
     out = {}
     for name, dev in list_evs(True).items():
@@ -210,9 +255,9 @@ def find_devices(
         # Skip HHD devices
         if "hhd" in dev.get("phys", "") or (
             # Allow bluetooth controllers that contain uhid and phys, while
-            # blocking hhd devices that contain uhid but not phys
+            # blocking hhd devices that contain uhid and a special mac address
             "uhid" in dev.get("sysfs", "")
-            and not dev.get("phys", "")
+            and dev.get("uniq", "").startswith("35:53:")
         ):
             continue
 
@@ -250,6 +295,25 @@ def find_devices(
                 is_controller = False
                 break
 
+        # Use SDL mappings
+        cap = BTN_GAMEPAD
+        major = cap >> 3
+        minor = cap & 0x07
+        guid = create_joystick_guid(dev)
+        if (
+            sdl_mappings
+            and controllers
+            and len(keys) > major
+            and keys[major] & (1 << minor)
+        ):
+            sdl_info = match_gamepad(dev, sdl_mappings)
+            if sdl_info:
+                is_controller = False
+            else:
+                sdl_info = {}
+        else:
+            sdl_info = {}
+
         # Avoid laptop keyboards, as they emit left meta on power button hold
         # FIXME: will prevent using laptop keyboards to bring up the menu
         is_keyboard = keyboard and not dev.get("name", "").startswith("AT Translated")
@@ -266,14 +330,19 @@ def find_devices(
             minor = cap & 0x07
 
             # Only bind armoury to Asus WMI hotkeys
-            if v == "armoury" and "Asus WMI hotkeys" not in dev.get("name", ""):
+            if v == "armoury" and (
+                "Asus WMI hotkeys" not in dev.get("name", "") or is_ally()
+            ):
                 continue
-            
+
+            if v == "fan" and ("asus" not in dev.get("name", "").lower() or is_ally()):
+                continue
+
             if len(keys) > major and keys[major] & (1 << minor):
                 is_custom = True
                 break
 
-        if is_touchscreen or is_controller or is_keyboard or is_custom:
+        if is_touchscreen or is_controller or is_keyboard or is_custom or sdl_info:
             out[name] = {
                 "is_touchscreen": is_touchscreen,
                 "is_controller": is_controller,
@@ -283,6 +352,8 @@ def find_devices(
                 "hash": dev.get("hash", ""),
                 "vid": dev.get("vendor", 0),
                 "pid": dev.get("product", 0),
+                "guid": guid.hex(),
+                "sdl_info": sdl_info,
             }
 
     return out
@@ -394,9 +465,13 @@ def process_touch(emit, state, ev, val):
         state["last_y"] = 0
         state["grab"] = False
 
+
 def process_custom(emit, ev, val):
     if ev == "armoury" and val and emit:
         emit({"type": "special", "event": "custom_armoury"})
+    if ev == "fan" and val and emit:
+        emit({"type": "special", "event": "custom_fan"})
+
 
 def process_kbd(emit, state, ev, val):
     if ev == "ctrl":
@@ -441,7 +516,7 @@ def refresh_kbd(emit, state):
         state["last_pressed"] = 0
 
 
-def process_ctrl(emit, state, ev, val):
+def process_ctrl(emit, state, ev, val, allow_select=True):
     # Here, we capture the shortcut xbox+b
     # This is a shortcut that is used by steam
     # but only when it is held, so we can use
@@ -453,11 +528,11 @@ def process_ctrl(emit, state, ev, val):
         state["select"] = val
         return
 
-    if ev != "b" and ev != "y":
+    if ev != "a" and ev != "b" and ev != "y" and ev != "x":
         return
 
     # Mode needs to be pressed
-    if not state.get("mode", None) and not state.get("select", None):
+    if not state.get("mode", None) and not (state.get("select", None) and allow_select):
         return
 
     if val:
@@ -476,7 +551,7 @@ def process_ctrl(emit, state, ev, val):
         state[ev] = None
 
 
-def process_events(emit, dev, evs):
+def process_events(emit, dev, evs, allow_select=True):
     # Some nice logging to make things easier
     if HHD_DEBUG:
         log = ""
@@ -535,7 +610,20 @@ def process_events(emit, dev, evs):
             and ev.code in CONTROLLER_WAKE_BUTTON
         ):
             process_ctrl(
-                emit, dev["state_ctrl"], CONTROLLER_WAKE_BUTTON[ev.code], ev.value
+                emit,
+                dev["state_ctrl"],
+                CONTROLLER_WAKE_BUTTON[ev.code],
+                ev.value,
+                allow_select=allow_select,
+            )
+
+        if (
+            dev["sdl_info"]
+            and ev.type == EV_KEY
+            and ev.code in dev["sdl_info"]["buttons"]
+        ):
+            process_ctrl(
+                emit, dev["state_ctrl"], dev["sdl_info"]["buttons"][ev.code], ev.value
             )
 
         if dev["is_keyboard"] and ev.type == EV_KEY and ev.code in KEYBOARD_WAKE_KEY:
@@ -543,6 +631,7 @@ def process_events(emit, dev, evs):
 
         if dev["is_custom"] and ev.type == EV_KEY and ev.code in CUSTOM_WAKE_KEY:
             process_custom(emit, CUSTOM_WAKE_KEY[ev.code], ev.value)
+
 
 def refresh_events(emit, dev):
     # if dev["is_touchscreen"]:
@@ -556,7 +645,7 @@ def refresh_events(emit, dev):
 def intercept_devices(devs, activate: bool):
     failed = []
     for id, dev in devs.items():
-        if not dev["is_controller"]:
+        if not dev["is_controller"] and not dev["sdl_info"]:
             continue
         d = dev["dev"]
         if activate:
@@ -564,25 +653,21 @@ def intercept_devices(devs, activate: bool):
                 grab_buttons(
                     d.fd,
                     B("EV_KEY"),
-                    {
-                        **CONTROLLER_WAKE_BUTTON,
-                        **KEYBOARD_WAKE_KEY,
-                        **OVERLAY_BUTTON_MAP,
-                        **CUSTOM_WAKE_KEY,
-                    },
+                    [
+                        *KEYBOARD_WAKE_KEY,
+                        *CUSTOM_WAKE_KEY,
+                        *dev["sdl_info"].get("wake_buttons", CONTROLLER_WAKE_BUTTON),
+                        *dev["sdl_info"].get("overlay_buttons", OVERLAY_BUTTON_MAP),
+                    ],
                 )
-                grab_buttons(d.fd, B("EV_ABS"), OVERLAY_AXIS_MAP)
+                grab_buttons(
+                    d.fd,
+                    B("EV_ABS"),
+                    dev["sdl_info"].get("overlay_axes", OVERLAY_AXIS_MAP),
+                )
 
                 if not dev.get("grabbed", False):
-                    fallback = True
-                    if ENHANCED_HIDING:
-                        try:
-                            ioctl(d.fd, EVIOCGRABCLEAN, 1)
-                            fallback = False
-                        except Exception:
-                            pass
-                    if fallback:
-                        d.grab()
+                    ioctl(d.fd, EVIOCGRAB, 2)
                     dev["grabbed"] = True
                 logger.info(f" - '{dev['pretty']}'")
             except Exception:
@@ -597,11 +682,11 @@ def intercept_devices(devs, activate: bool):
                 grab_buttons(
                     d.fd,
                     B("EV_KEY"),
-                    {
-                        **CONTROLLER_WAKE_BUTTON,
-                        **KEYBOARD_WAKE_KEY,
-                        **CUSTOM_WAKE_KEY,
-                    },
+                    [
+                        *dev["sdl_info"].get("wake_buttons", CONTROLLER_WAKE_BUTTON),
+                        *KEYBOARD_WAKE_KEY,
+                        *CUSTOM_WAKE_KEY,
+                    ],
                 )
                 grab_buttons(d.fd, B("EV_ABS"), {})
                 logger.info(f" - '{dev['pretty']}'")
@@ -611,7 +696,7 @@ def intercept_devices(devs, activate: bool):
     return failed
 
 
-def intercept_events(emit, intercept_num, cid, dinput, smax, evs):
+def intercept_events(emit, intercept_num, cid, abs, sdl, evs):
     if not emit:
         return
 
@@ -620,32 +705,86 @@ def intercept_events(emit, intercept_num, cid, dinput, smax, evs):
         if ev.type == EV_SYN:
             continue
 
-        if ev.type == EV_KEY and ev.code in OVERLAY_BUTTON_MAP:
+        overlay_buttons = sdl.get("buttons", OVERLAY_BUTTON_MAP)
+        overlay_axes = sdl.get("axes", OVERLAY_AXIS_MAP)
+
+        if ev.type == EV_KEY and ev.code in overlay_buttons:
             out.append(
                 {
                     "type": "button",
-                    "code": OVERLAY_BUTTON_MAP[ev.code],
+                    "code": overlay_buttons[ev.code],
                     "value": ev.value,
                 }
             )
-        elif ev.type == EV_ABS and ev.code in OVERLAY_AXIS_MAP:
-            code = OVERLAY_AXIS_MAP[ev.code]
+        elif ev.type == EV_ABS and ev.code in overlay_axes:
+            code = overlay_axes[ev.code]
 
-            if "ls" in code:
-                if dinput:
-                    v = min(1, max(-1, 2 * ev.value / smax - 1))
-                else:
-                    v = min(1, max(-1, ev.value / smax))
-            else:
-                v = ev.value
-
-            out.append(
-                {
-                    "type": "axis",
-                    "code": code,
-                    "value": v,
-                }
+            smin = abs[ev.code]["min"]
+            smax = abs[ev.code]["max"]
+            v = min(
+                1,
+                max(
+                    0,
+                    (ev.value - smin) / (smax - smin),
+                ),
             )
+
+            if isinstance(code, dict):
+                dtype = code["type"]
+                info = code
+                code = info.get("code", "")
+            else:
+                dtype = "axis"
+                info = {}
+
+            if info.get("flip", False):
+                v = 1 - v
+
+            if "trigger" not in code:
+                v = v * 2 - 1
+
+            if dtype == "axis":
+                out.append(
+                    {
+                        "type": "axis",
+                        "code": code,
+                        "value": v,
+                    }
+                )
+            elif dtype == "button":
+                if v > AXIS_LIMIT:
+                    v = 1
+                else:
+                    v = 0
+                out.append(
+                    {
+                        "type": "button",
+                        "code": code,
+                        "value": v,
+                    }
+                )
+            elif dtype == "hat":
+                vu = 0
+                vd = 0
+                if v > AXIS_LIMIT:
+                    vu = 1
+                elif v < -AXIS_LIMIT:
+                    vd = 1
+
+                out.append(
+                    {
+                        "type": "button",
+                        "code": info["up_code"],
+                        "value": vu,
+                    }
+                )
+                out.append(
+                    {
+                        "type": "button",
+                        "code": info["down_code"],
+                        "value": vd,
+                    }
+                )
 
     emit.intercept(cid + intercept_num, out)
 
@@ -659,11 +798,14 @@ def device_shortcut_loop(
     touchscreens: bool = True,
     disable_touchscreens: bool = False,
     touch_correction: dict | None = None,
+    sdl_mappings: Any | None = None,
+    allow_select: bool = True,
 ):
     blacklist = set()
     last_check = 0
     intercept = False
     intercept_num = 0
+    steam_frozen = False
     devs = {}
     while not should_exit or not should_exit.is_set():
         if devs:
@@ -682,17 +824,23 @@ def device_shortcut_loop(
 
         # Process events
         should_intercept = emit and emit.should_intercept()
-        if any(dev["is_controller"] for dev in devs.values()):
+        if any(dev["is_controller"] or dev["sdl_info"] for dev in devs.values()):
             failed = []
             if not intercept and should_intercept:
                 intercept = True
                 intercept_num += 1
                 logger.info("Intercepting other controllers:")
                 failed = intercept_devices(devs, True)
+
+                if emit and not steam_frozen and len(devs) > len(failed):
+                    steam_frozen = freeze_steam(True)
+                    if steam_frozen:
+                        logger.info("Froze Steam (to avoid HID device dual input)")
             elif intercept and not should_intercept:
                 intercept = False
                 logger.info("Stopping intercepting other controllers:")
                 failed = intercept_devices(devs, False)
+
             for id, f in failed:
                 blacklist.add(f["hash"])
                 try:
@@ -700,24 +848,33 @@ def device_shortcut_loop(
                 except Exception:
                     pass
 
+        if emit and steam_frozen and not should_intercept:
+            # Give time for the B event to be lost
+            time.sleep(0.25)
+            logger.info("Unfreezing Steam")
+            freeze_steam(False)
+            steam_frozen = False
+
         for name, dev in list(devs.items()):
             d = dev["dev"]
             refresh_events(emit, dev)
             if not d.fd in r:
                 # Run interception so that holding button repeats work
-                if should_intercept and dev["is_controller"]:
+                if should_intercept and (dev["is_controller"] or dev["sdl_info"]):
                     intercept_events(
                         emit,
                         intercept_num,
                         dev["hash"],
-                        dev["dinput"],
-                        dev["stick_max"],
+                        dev["abs_info"],
+                        dev["sdl_info"],
                         [],
                     )
                 continue
 
             try:
-                if dev["is_controller"] and os.stat(name).st_mode & stat.S_IRGRP == 0:
+                if (dev["is_controller"] or dev["sdl_info"]) and os.stat(
+                    name
+                ).st_mode & stat.S_IRGRP == 0:
                     logger.info(f"Removing hidden device: '{dev['pretty']}'")
                     blacklist.add(cand["hash"])
                     del devs[name]
@@ -729,14 +886,14 @@ def device_shortcut_loop(
 
                 e = list(d.read())
                 # print(e)
-                process_events(emit, dev, e)
-                if should_intercept and dev["is_controller"]:
+                process_events(emit, dev, e, allow_select=allow_select)
+                if should_intercept and (dev["is_controller"] or dev["sdl_info"]):
                     intercept_events(
                         emit,
                         intercept_num,
                         dev["hash"],
-                        dev["dinput"],
-                        dev["stick_max"],
+                        dev["abs_info"],
+                        dev["sdl_info"],
                         e,
                     )
             except Exception as e:
@@ -762,6 +919,7 @@ def device_shortcut_loop(
             keyboard=keyboard,
             touchscreens=touchscreens or disable_touchscreens,
             controllers=controllers,
+            sdl_mappings=sdl_mappings,
         ).items():
             if cand["hash"] in blacklist:
                 continue
@@ -774,23 +932,26 @@ def device_shortcut_loop(
 
                 if cand["is_touchscreen"] and disable_touchscreens:
                     # Grab touchscreen if requested
-                    fallback = True
-                    if ENHANCED_HIDING:
-                        try:
-                            ioctl(dev.fd, EVIOCGRABCLEAN, 1)
-                            fallback = False
-                        except Exception:
-                            pass
-                    if fallback:
-                        dev.grab()
+                    dev.grab()
 
                 # Add event filters to avoid CPU use
                 # Do controllers and keyboards together as buttons do not consume much
-                if cand["is_controller"] or cand["is_keyboard"] or cand["is_custom"]:
+                if (
+                    cand["sdl_info"]
+                    or cand["is_controller"]
+                    or cand["is_keyboard"]
+                    or cand["is_custom"]
+                ):
                     grab_buttons(
                         dev.fd,
                         B("EV_KEY"),
-                        {**CONTROLLER_WAKE_BUTTON, **KEYBOARD_WAKE_KEY, **CUSTOM_WAKE_KEY},
+                        [
+                            *cand["sdl_info"].get(
+                                "wake_buttons", CONTROLLER_WAKE_BUTTON
+                            ),
+                            *KEYBOARD_WAKE_KEY,
+                            *CUSTOM_WAKE_KEY,
+                        ],
                     )
                 else:
                     grab_buttons(dev.fd, B("EV_KEY"), {})
@@ -855,17 +1016,24 @@ def device_shortcut_loop(
                             "flip_y": flip_y,
                         }
                     )
-                if cand["is_controller"]:
-                    try:
-                        stick_max = dev.absinfo(B("ABS_X")).max
-                        dinput = not dev.absinfo(B("ABS_X")).min
-                    except Exception:
-                        stick_max = 2**16
-                        dinput = False
-                    devs[name]["dinput"] = dinput
+
+                # Common
+                if cand["is_controller"] or cand["sdl_info"]:
+                    cap = dev.capabilities(verbose=False, absinfo=True)
+                    devs[name]["abs_info"] = {k: {"min": v.min, "max": v.max} for k, v in cap.get(EV_ABS, [])}  # type: ignore
                     devs[name]["state_ctrl"].update({"uniq": dev.uniq})
-                    devs[name]["stick_max"] = stick_max
-                    caps.append(f"Controller[dinput={dinput}, smax={stick_max}]")
+                # Controller
+                if cand["is_controller"]:
+                    caps.append(f"Controller[ukn={cand['guid']}]")
+                if cand["sdl_info"]:
+                    pretty = cand["sdl_info"].get("name", "Unknown")
+                    guid = cand["sdl_info"].get("guid", None)
+                    if guid:
+                        guid = guid.hex()
+                    else:
+                        guid = None
+                    caps.append(f'SDL[{guid}="{pretty}"]')
+
                 if cand["is_keyboard"]:
                     caps.append("Keyboard")
                 if cand["is_custom"]:
@@ -949,8 +1117,15 @@ class OverlayWriter:
                         "rb",
                         "lb",
                         "mode",
+                        "select",
+                        "dpad_up",
+                        "dpad_down",
+                        "dpad_left",
+                        "dpad_right",
                     ):
                         continue
+                    if "dpad_" in code:
+                        code = code.replace("dpad_", "")
                     val = ev["value"]
                     if (
                         code not in self.state[cid]
@@ -960,7 +1135,7 @@ class OverlayWriter:
                         self.state[cid][code] = curr + REPEAT_INITIAL if val else None
 
         # Ignore guide combos
-        if self.state[cid].get("mode", None):
+        if self.state[cid].get("mode", None) or self.state[cid].get("select", None):
             return
 
         # Allow holds
@@ -974,7 +1149,13 @@ class OverlayWriter:
         # Process changed events
         cmds = ""
         for code, val in changed:
-            if val:
+            if code == "b":
+                # This is tricky, if we do not wait for release,
+                # input will leak to steam and into the game.
+                # So for b specifically, wait for up
+                if not val:
+                    cmds += f"action:b\n"
+            elif val:
                 cmds += f"action:{code}\n"
             elif code == "x":
                 cmds += f"action:x_up\n"

@@ -53,21 +53,30 @@ OXP_2_CONF = {
     **ONEX_DEFAULT_CONF,
     "protocol": "mixed",
     "rgb": False,
-    "buttons": "none",
     "protocol": "none",  # explicitly disable
+    "extra_buttons": "none",
 }
 AOKZOE_CONF = {
     "name": "AOKZOE A1",
     "hrtimer": True,
     "protocol": "none",
     "rgb": False,
+    "aok": True,
+    "extra_buttons": "none",
 }
 
 CONFS = {
     # Aokzoe
     "AOKZOE A1 AR07": AOKZOE_CONF,
     "AOKZOE A1 Pro": AOKZOE_CONF,
-    "AOKZOE A1X": AOKZOE_CONF,
+    "AOKZOE A2 Pro": AOKZOE_CONF,
+    "AOKZOE A1X": {
+        "name": "AOKZOE A1X",
+        "hrtimer": True,
+        "protocol": "hid_v2",
+        "aok": True,
+        "extra_buttons": "none",
+    },
     # Onexplayer
     "ONE XPLAYER": {"name": "ONE XPLAYER", **ONEX_DEFAULT_CONF},
     "ONEXPLAYER Mini Pro": {
@@ -93,7 +102,14 @@ CONFS = {
     # X1 Line
     "ONEXPLAYER X1 mini": {
         **ONEX_DEFAULT_CONF,
-        "name": "ONEXPLAYER X1 mini",
+        "name": "ONEXPLAYER X1 Mini",
+        "x1": True,
+        "mapping": X1_MINI_MAPPING,
+        "protocol": "hid_v1",
+    },
+    "ONEXPLAYER X1Mini Pro": {
+        **ONEX_DEFAULT_CONF,
+        "name": "ONEXPLAYER X1 Mini Pro",
         "x1": True,
         "mapping": X1_MINI_MAPPING,
         "protocol": "hid_v1",
@@ -106,13 +122,30 @@ CONFS = {
         "mapping": X1_MAPPING,
         "protocol": "serial",
     },
-    "ONEXPLAYER X1Pro": {
+    "ONEXPLAYER X1z": {
         **ONEX_DEFAULT_CONF,
         "name": "ONEXPLAYER X1 (AMD)",
         "x1": True,
         "rgb_secondary": True,
         "mapping": X1_MAPPING,
         "protocol": "serial",
+    },
+    "ONEXPLAYER X1Pro": {
+        **ONEX_DEFAULT_CONF,
+        "name": "ONEXPLAYER X1 Pro (AMD)",
+        "x1": True,
+        "rgb_secondary": True,
+        "mapping": X1_MAPPING,
+        "protocol": "serial",
+    },
+    "ONEXPLAYER X1Pro EVA-02": {
+        **ONEX_DEFAULT_CONF,
+        "name": "ONEXPLAYER X1Pro EVA-02 (Intel)",
+        "x1": True,
+        "rgb_secondary": True,
+        "mapping": X1_MAPPING,
+        "protocol": "serial",
+        "turbo": True,  # disable turbo takeover so that it can be used for TDP
     },
     "ONEXPLAYER X1 i": {
         **ONEX_DEFAULT_CONF,
@@ -155,5 +188,6 @@ def get_default_config(product_name: str, manufacturer: str):
     if "aokzoe" in manufacturer.lower():
         out["protocol"] = "none"
         out["rgb"] = False
+        out["aok"] = True
 
     return out

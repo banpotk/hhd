@@ -42,7 +42,7 @@ brightnessd:
 oxp:
   mode:
     type: multiple
-    title: Stick Style
+    title: Style
     tags: [non-essential]
     default: classic
     options:
@@ -56,6 +56,26 @@ oxp:
       aurora: "Aurora"
       sun: "Warm Sun"
       classic: "OXP Classic"
+
+  brightnessd: *brightnessd
+
+aok:
+  mode:
+    type: multiple
+    title: Style
+    tags: [non-essential]
+    default: classic
+    options:
+      monster_woke: "Monster Woke"
+      flowing: "Flowing Light"
+      sunset: "Sunset Afterglow"
+      neon: "Colorful Neon"
+      dreamy: "Dreamy"
+      cyberpunk: "Cyberpunk"
+      colorful: "Colorful"
+      aurora: "Aurora"
+      sun: "Warm Sun"
+      aok: "AOK Classic"
 
   brightnessd: *brightnessd
 

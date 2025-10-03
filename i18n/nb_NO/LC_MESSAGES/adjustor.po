@@ -1,41 +1,42 @@
-#
-# Victor Borges <victor1882@outlook.com>, 2024.
+# Translations template for PROJECT.
+# Copyright (C) 2024 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2024.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2024-04-08 19:36+0200\n"
-"PO-Revision-Date: 2024-04-09 15:26-0300\n"
-"Last-Translator: Victor Borges <victor1882@outlook.com>\n"
-"Language: pt\n"
-"Language-Team: pt <LL@li.org>\n"
-"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"POT-Creation-Date: 2020-01-01 00:00+0000\n"
+"PO-Revision-Date: 2024-04-23 14:07+0000\n"
+"Last-Translator: Allan Nordhøy <epost@anotheragency.no>\n"
+"Language-Team: Norwegian Bokmål <https://hosted.weblate.org/projects/hhd/"
+"adjustor/nb_NO/>\n"
+"Language: nb_NO\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=n != 1;\n"
+"X-Generator: Weblate 5.5-dev\n"
 "Generated-By: Babel 2.14.0\n"
-"X-Generator: Gtranslator 45.3\n"
 
 msgid "Due to a suspected crash, auto-start was disabled."
-msgstr "Devido a um possível erro, a auto-inicialização foi desabilitada."
+msgstr ""
 
 msgid "TDP Controls can not be enabled while other TDP plugins are installed."
 msgstr ""
-"Controles de TDP não podem ser habilitados enquanto outros plugins de TDP "
-"estão instalados."
 
 #. Setting: TDP Controls
 #. Field: title
 msgid "TDP Controls"
-msgstr "Controles de TDP"
+msgstr ""
 
-#. Setting: Enable TDP Controls
+#. Setting: Enable TDP Controls [BETA]
 #. Field: title
-msgid "Enable TDP Controls"
-msgstr "Habilitar Controles de TDP"
+msgid "Enable TDP Controls [BETA]"
+msgstr ""
 
-#. Setting: Enable TDP Controls
+#. Setting: Enable TDP Controls [BETA]
 #. Field: hint
 #. Setting: Enable TDP Controls
 msgid ""
@@ -44,33 +45,26 @@ msgid ""
 "device changes (ac/dc).\n"
 "If the device crashes, TDP setting will be disabled on next startup."
 msgstr ""
-"Habilitado o gerenciamento de TDP pelo Handheld Daemon. Enquanto habilitado, "
-"Handheld Daemon vai atribuir e manter os limites de TDP definidos na "
-"inicialização e durante outras mudanças no dispositivo (plugar carregador).\n"
-"Se o dispositivo crashar, as configurações de TDP serão desabilitadas na "
-"próxima inicialização."
 
 #. Setting: Error
 #. Field: title
 msgid "Error"
-msgstr "Erro"
+msgstr ""
 
 #. Setting: Error
 #. Option: nowrite
 msgid "Can not write to ACPI Call file. ACPI Call is required for TDP."
 msgstr ""
-"Não foi possível escrever no arquivo de chamada ACPI. Chamada ACPI é "
-"necessário para TDP."
 
 #. Setting: Enable TDP Controls
 #. Field: title
 msgid "Enable TDP Controls"
-msgstr "Habilitar Controles de TDP"
+msgstr ""
 
 #. Setting: Enforce Device TDP Limits
 #. Field: title
 msgid "Enforce Device TDP Limits"
-msgstr "Forçar Limites de TDP do Dispositivo"
+msgstr ""
 
 #. Setting: Enforce Device TDP Limits
 #. Field: hint
@@ -83,29 +77,21 @@ msgid ""
 "All settings outside specifications will be set to system specifications "
 "after rebooting."
 msgstr ""
-"Quando esta opção está habilitada, as configurações aqui vão aderir aos "
-"limites impostos pelo fabricante do dispositivo, sujeito à sua "
-"disponibilidade.\n"
-"Com isso desativado, os limites das configurações de TDP vão expandir para o "
-"que é logicamente possível para o dispositivo atual (independentemente das "
-"especificações do fabricante).\n"
-"Todas as configurações fora das especificações serão definidas para as "
-"especificações do fabricante depois de reiniciar."
 
 #. Setting: Asus TDP
 #. Field: title
 msgid "Asus TDP"
-msgstr "Asus TDP"
+msgstr ""
 
 #. Setting: Asus TDP
 #. Field: hint
 msgid "Uses the interface of Armory Crate to set the TDP of the device."
-msgstr "Usa a interface do Armoury Crate para definir o TDP do dispositivo."
+msgstr ""
 
 #. Setting: TDP
 #. Field: title
 msgid "TDP"
-msgstr "TDP"
+msgstr ""
 
 #. Setting: TDP
 #. Field: hint
@@ -115,55 +101,48 @@ msgid ""
 "it sets the fast value to 53/30*tdp and the slow value to 43/30*tdp. Boost "
 "is recommended for desktop use."
 msgstr ""
-"Média de TDP desejado.\n"
-"Define os valores STAPM para ele sem boost. Com boost, define o valor rápido "
-"para 53/30*TDP e o valor lento para 43/30*TDP. Boost é recomendado para uso "
-"como desktop."
 
 #. Setting: TDP Boost
 #. Field: title
 msgid "TDP Boost"
-msgstr "TDP Boost"
+msgstr ""
 
 #. Setting: TDP Boost
 #. Field: hint
 msgid "Allows the device to boost by setting appropriate slow and fast TDPs."
 msgstr ""
-"Permite o dispositivo usar boost clocks definindo valores apropriados para "
-"os TDPs lento e rápido."
 
 #. Setting: Custom Fan Curve
 #. Field: title
 msgid "Custom Fan Curve"
-msgstr "Curva Personalizada da Ventoinha"
+msgstr ""
 
 #. Setting: Custom Fan Curve
 #. Field: hint
 msgid "Allows you to set a custom fan curve."
 msgstr ""
-"Permite definir uma curva personalizada para a ventoinha do dispositivo."
 
 #. Setting: Disabled
 #. Field: title
 #. Setting: Charge Limit (%)
 #. Option: disabled
 msgid "Disabled"
-msgstr "Desabilitado"
+msgstr "Avskrudd"
 
 #. Setting: Disabled
 #. Field: hint
 msgid "Lets the device manage the fan curve on its own."
-msgstr "Deixa o dispositivo gerenciar a curva da ventoinha por si próprio."
+msgstr ""
 
-#. Setting: Manual
+#. Setting: Manual [BETA]
 #. Field: title
-msgid "Manual"
-msgstr "Manual"
+msgid "Manual [BETA]"
+msgstr ""
 
 #. Setting: 30C
 #. Field: title
 msgid "30C"
-msgstr "30 °C"
+msgstr ""
 
 #. Setting: 30C
 #. Field: hint
@@ -177,137 +156,137 @@ msgstr "30 °C"
 #. Setting: 10C
 #. Setting: 20C
 msgid "Sets the speed at the named temperature."
-msgstr "Define a velocidade nessa temperatura."
+msgstr ""
 
 #. Setting: 40C
 #. Field: title
 msgid "40C"
-msgstr "40 °C"
+msgstr ""
 
 #. Setting: 50C
 #. Field: title
 msgid "50C"
-msgstr "50 °C"
+msgstr ""
 
 #. Setting: 60C
 #. Field: title
 msgid "60C"
-msgstr "60 °C"
+msgstr ""
 
 #. Setting: 70C
 #. Field: title
 msgid "70C"
-msgstr "70 °C"
+msgstr ""
 
 #. Setting: 80C
 #. Field: title
 msgid "80C"
-msgstr "80 °C"
+msgstr ""
 
 #. Setting: 90C
 #. Field: title
 msgid "90C"
-msgstr "90 °C"
+msgstr ""
 
 #. Setting: 100C
 #. Field: title
 msgid "100C"
-msgstr "100 °C"
+msgstr ""
 
 #. Setting: Restore Default
 #. Field: title
 msgid "Restore Default"
-msgstr "Restaurar Padrão"
+msgstr "Gjenopprett forvalg"
 
 #. Setting: Restore Default
 #. Field: hint
 msgid "Restore a default sane fan curve."
-msgstr "Restaura para a curva padrão."
+msgstr ""
 
 #. Setting: Fan Curve Limitation
 #. Field: title
 msgid "Fan Curve Limitation"
-msgstr "Limitação da Curva da Ventoinha"
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Field: title
 msgid "Charge Limit (%)"
-msgstr "Limite de Carregamento (%)"
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Field: hint
 msgid "Applies a charge limit to the battery, 75% and up."
-msgstr "Aplica um limite de carregamento para a bateria, 75% e acima."
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Option: p65
 msgid "65%"
-msgstr "65%"
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Option: p70
 msgid "70%"
-msgstr "70%"
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Option: p80
 msgid "80%"
-msgstr "80%"
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Option: p85
 msgid "85%"
-msgstr "85%"
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Option: p90
 msgid "90%"
-msgstr "90%"
+msgstr ""
 
 #. Setting: Charge Limit (%)
 #. Option: p95
 msgid "95%"
-msgstr "95%"
+msgstr ""
 
 #. Setting: Sleep Bug
 #. Field: title
 msgid "Sleep Bug"
-msgstr "Bug da Suspensão"
+msgstr ""
 
 #. Setting: Lenovo TDP
 #. Field: title
 msgid "Lenovo TDP"
-msgstr "Lenovo TDP"
+msgstr ""
 
 #. Setting: Lenovo TDP
 #. Field: hint
 msgid "Uses the interface of Legion Space to set the TDP of the device."
-msgstr "Usa a interface do Legion Space para definir o TDP do dispositivo."
+msgstr ""
 
 #. Setting: TDP Mode
 #. Field: title
 msgid "TDP Mode"
-msgstr "Modo TDP"
+msgstr ""
 
 #. Setting: Quiet (8W)
 #. Field: title
 msgid "Quiet (8W)"
-msgstr "Quieto (8W)"
+msgstr ""
 
 #. Setting: Balanced (15W)
 #. Field: title
 msgid "Balanced (15W)"
-msgstr "Balanceado (15W)"
+msgstr ""
 
 #. Setting: Performance (20W)
 #. Field: title
 msgid "Performance (20W)"
-msgstr "Performance (20W)"
+msgstr ""
 
 #. Setting: Custom (up to 25-30W)
 #. Field: title
 msgid "Custom (up to 25-30W)"
-msgstr "Personalizado (até 25-30W)"
+msgstr ""
 
 #. Setting: TDP
 #. Field: hint
@@ -318,16 +297,11 @@ msgid ""
 "If it is not, it sets the Slow limit equal to TDP and the Fast limit to +2W. "
 "Boost is recommended for desktop use."
 msgstr ""
-"Média de TDP desejado.\n"
-"Define os valores STAPM para ele. Se o boost estiver habilitado, interpola "
-"os valores para TDP lento e rápido baseado nos valores usados pela Lenovo. "
-"Se não estiver, define o limite lento igual ao TDP, e o limite rápido igual "
-"ao TDP+2W. Boost é recomendado para uso como desktop."
 
 #. Setting: Set Fan to Full Speed
 #. Field: title
 msgid "Set Fan to Full Speed"
-msgstr "Ventoinha na Velocidade Máxima"
+msgstr ""
 
 #. Setting: Custom Fan Curve
 #. Field: hint
@@ -337,10 +311,6 @@ msgid ""
 "modes. This fan curve needs to be reapplied and is reapplied every time you "
 "switch  TDP modes."
 msgstr ""
-"Permite definir uma curva personalizada para a ventoinha. Essa curva só é "
-"oficialmente suportada no modo personalizado, mas você pode usá-la em outros "
-"modos. Essa curva precisa ser reaplicada e é reaplicada toda vez que você "
-"altera entre os modos TDP."
 
 #. Setting: Disabled
 #. Field: hint
@@ -348,121 +318,117 @@ msgid ""
 "Lets Legion GO manage the curve on its own. Setting this option will cause a "
 "mode change to reset the fan curve."
 msgstr ""
-"Deixa o Legion Go gerenciar a curva por si próprio. Habilitar essa opção "
-"fará com que a curva da ventoinha seja reiniciada ao mudar o modo TDP."
 
 #. Setting: 10C
 #. Field: title
 msgid "10C"
-msgstr "10 °C"
+msgstr ""
 
 #. Setting: 20C
 #. Field: title
 msgid "20C"
-msgstr "20 °C"
+msgstr ""
 
 #. Setting: Enforce Windows Minimums
 #. Field: title
 msgid "Enforce Windows Minimums"
-msgstr "Forçar Mínimos do Windows"
+msgstr ""
 
 #. Setting: Enforce Windows Minimums
 #. Field: hint
 msgid "Enforce the minimum fan curve from Legion Space."
-msgstr "Força a curva mínima da ventoinha do Legion Space."
+msgstr ""
 
 #. Setting: Restore Default
 #. Field: hint
 msgid "Reset to the original fan curve provided by Lenovo in BIOS V28."
-msgstr "Restaura para a curva original providenciada pela Lenovo na BIOS v28."
+msgstr ""
 
 #. Setting: Enable Charge Limit (80%)
 #. Field: title
 msgid "Enable Charge Limit (80%)"
-msgstr "Habilita o Limite de Carregamento (80%)"
+msgstr ""
 
 #. Setting: Enable Charge Limit (80%)
 #. Field: hint
 msgid ""
 "Limits device charging to 80%. Lenovo EC method. Available since BIOSv29."
 msgstr ""
-"Limita o carregamento do dispositivo para 80%. Método Lenovo EC. Disponível "
-"desde a BIOS v29."
 
 #. Setting: Enable Power Light
 #. Field: title
 msgid "Enable Power Light"
-msgstr "Habilitar o LED de Energia"
+msgstr ""
 
 #. Setting: TDP Settings
 #. Field: title
 msgid "TDP Settings"
-msgstr "Configurações TDP"
+msgstr ""
 
 #. Setting: TDP
 #. Field: hint
 msgid "Controls all Ryzen SMU settings through preset curves."
-msgstr "Controla todas as configurações do Ryzen SMU por curva pré-definidas."
+msgstr ""
 
 #. Setting: Advanced Configurator
 #. Field: title
 msgid "Advanced Configurator"
-msgstr "Configurador Avançado"
+msgstr ""
 
 #. Setting: Apply Settings
 #. Field: title
 msgid "Apply Settings"
-msgstr "Aplicar Configurações"
+msgstr ""
 
 #. Setting: TDP Status
 #. Field: title
 msgid "TDP Status"
-msgstr "Status TDP"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Field: title
 msgid "Platform Profile"
-msgstr "Perfil da Plataforma"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Option: disabled
 msgid "Not Set"
-msgstr "Não Definido"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Option: low-power
 msgid "Low Power"
-msgstr "Baixo Consumo"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Option: cool
 msgid "Cool"
-msgstr "Frio"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Option: quiet
 msgid "Quiet"
-msgstr "Quieto"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Option: balanced
 msgid "Balanced"
-msgstr "Balanceado"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Option: balanced-performance
 msgid "Balanced Performance"
-msgstr "Balanceado Performance"
+msgstr ""
 
 #. Setting: Platform Profile
 #. Option: performance
 msgid "Performance"
-msgstr "Performance"
+msgstr ""
 
 #. Setting: Standard Parameters
 #. Field: title
 msgid "Standard Parameters"
-msgstr "Parâmetros Padrão"
+msgstr ""
 
 #. Setting: Standard Parameters
 #. Field: hint
@@ -483,48 +449,31 @@ msgid ""
 "the actual max TDP value of the device. Then,the Slow TDP limit averages the "
 "last 10-20s of TDP values and keeps the value below it."
 msgstr ""
-"Parâmetros Padrão de TDP para processadores Ryzen. Todos devem ser definidos "
-"para controlar o TDP do dispositivo de forma correta.\n"
-"Processadores Ryzen possuem 2 modos: STTv2 e STAPM (legado). AMD sugere que "
-"os fabricantes usem STTv2, o que faz o Legion Go ser o único dispositivo que "
-"oferece o STAPM como alternativa na BIOS.\n"
-"Em STTv2, o dispositivo continuará em boost até que a \"pele\" do "
-"dispositivo (a parte mais quente que o usuário pode acessar) chegue em uma "
-"temperatura definida pelo fabricante. Então, o dispositivo usará o limite de "
-"TDP de temperatura da pele. Em STAPM, o dispositivo faz uma média dos "
-"valores de TDP dos últimos 1 a 3 minutos e mantém esse valor abaixo do "
-"limite de TDP STAPM. Qualquer modo ignora os limites do outro modo (limite "
-"do STAPM não faz nada em STT e o limite de temperatura da pele não faz nada "
-"em STAPM), então ambos os valores devem ser definidos.\n"
-"Os limites rápido e lento controlam o comportamento do boost. O limite de "
-"TDP rápido é o verdadeiro valor máximo de TDP do dispositivo. Então, o "
-"limite de TDP lento faz uma média dos últimos 10 a 20 segundos de valores de "
-"TDP e mantém o valor abaixo dele."
 
 #. Setting: Fast TDP Limit
 #. Field: title
 msgid "Fast TDP Limit"
-msgstr "Limite de TDP Rápido"
+msgstr ""
 
 #. Setting: Slow TDP Limit
 #. Field: title
 msgid "Slow TDP Limit"
-msgstr "Limite de TDP Lento"
+msgstr ""
 
 #. Setting: Skin Temp TDP Limit
 #. Field: title
 msgid "Skin Temp TDP Limit"
-msgstr "Limite de TDP da Temperatura da Pele"
+msgstr ""
 
 #. Setting: STAPM TDP Limit
 #. Field: title
 msgid "STAPM TDP Limit"
-msgstr "Limite de TDP STAPM"
+msgstr ""
 
 #. Setting: Advanced Parameters
 #. Field: title
 msgid "Advanced Parameters"
-msgstr "Parâmetros Avançados"
+msgstr ""
 
 #. Setting: Advanced Parameters
 #. Field: hint
@@ -540,35 +489,23 @@ msgid ""
 "values the CPU will average to calculate its current Slow and STAPM  TDP "
 "values."
 msgstr ""
-"Os Parâmetros Avançados abaixo controlam o comportamento de boost e precisam "
-"ser ajustados por dispositivo dependendo dos limites de refrigeração do "
-"sistema. Eles afetam principalmente o comportamento de boost, que é "
-"importante para uso como desktop.\n"
-"A exceção é o Limite de Temperatura (TCTL), que controla a temperatura "
-"máxima da CPU. Na maioria dos dispositivos, ele pode seguramente ser "
-"aumentado até 100 °C. Porém, se um pico de temperatura fizer o chip chegar a "
-"105 °C, ele entrará em um modo de proteção térmico, que é 5W, por alguns "
-"minutos.\n"
-"Os tempos de integração para o TDP lento e STAPM influenciam quantos valores "
-"préviso de TDP que a CPU fará a média para calcular o valor atual do TDP "
-"lento e STAPM."
 
 #. Setting: Temp Target (TCTL)
 #. Field: title
 msgid "Temp Target (TCTL)"
-msgstr "Limite de Temperatura (TCTL)"
+msgstr ""
 
 #. Setting: Slow Limit Integration Time
 #. Field: title
 msgid "Slow Limit Integration Time"
-msgstr "Tempo de Integração do Limite Lento"
+msgstr ""
 
 #. Setting: STAPM Limit Integration Time
 #. Field: title
 msgid "STAPM Limit Integration Time"
-msgstr "Tempo de Integração do Limite STAPM"
+msgstr ""
 
 #. Setting: Enable Advanced Parameters
 #. Field: title
 msgid "Enable Advanced Parameters"
-msgstr "Habilitar Parâmetros Avançados"
+msgstr ""

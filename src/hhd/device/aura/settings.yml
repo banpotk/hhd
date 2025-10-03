@@ -1,0 +1,61 @@
+rgb:
+  aura:
+    type: container
+    title: Aura Settings
+    tags: [ hide-title ]
+    children:
+      brightness:
+        type: multiple
+        title: Brightness
+        tags: [non-essential, ordinal]
+        options:
+          disabled: "Off"
+          low: "Low"
+          medium: "Medium"
+          high: "High"
+        default: medium
+      
+      power:
+        type: container
+        title: RGB Power Settings
+        tags: [non-essential, power]
+        children:
+          tdp_changes:
+            type: bool
+            title: "On TDP Changes"
+            default: True
+            tags: [non-essential, power-tdp]
+
+          boot:
+            type: bool
+            title: "Boot"
+            default: True
+            tags: [non-essential, power-on]
+          
+          awake:
+            type: bool
+            title: "Awake"
+            default: True
+            tags: [non-essential, power-sleep]
+          
+          sleep:
+            type: bool
+            title: "Sleep while Charging"
+            default: False
+            tags: [non-essential, power-sleep]
+          
+          shutdown:
+            type: bool
+            title: "Shutdown"
+            default: False
+            tags: [non-essential, power-shutdown]
+
+hhd:
+  settings:
+    type: container
+
+    children:
+      aura:
+        type: bool
+        title: Enable Aura RGB support
+        default: True

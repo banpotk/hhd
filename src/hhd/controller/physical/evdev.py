@@ -181,7 +181,7 @@ def list_evs(filter_valid: bool = False, fn: str = "/proc/bus/input/devices"):
                 continue
             match line[0]:
                 case "I":
-                    for attr in line[3:-1].split(" "):
+                    for attr in line[3:].split(" "):
                         name, val = attr.split("=")
                         out[name.lower()] = int(val, 16)
                 case "N":
@@ -199,10 +199,13 @@ def list_evs(filter_valid: bool = False, fn: str = "/proc/bus/input/devices"):
                     # we reverse it to little endian
                     out["byte"][head.lower()] = bytes(reversed(arr))
                 case "P":
-                    out["phys"] = line[len('P: Phys="') : -1]
+                    out["phys"] = line[len('P: Phys=') : ]
                 case "S":
                     if "Sysfs" in line:
-                        out["sysfs"] = line[len('S: Sysfs="') : -1]
+                        out["sysfs"] = line[len('S: Sysfs=') : ]
+                case "U":
+                    if "Uniq" in line:
+                        out["uniq"] = line[len('U: Uniq=') :]
                 case "H":
                     if len(line) < len("H: Handlers=") + 1:
                         continue

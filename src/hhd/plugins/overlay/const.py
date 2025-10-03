@@ -37,6 +37,9 @@ TOUCH_SCREEN_QUIRKS = {
     TM("RC72LA", name="ROG Ally X"): DEFAULT_LANDSCAPE,
     # Ayaneo
     TM("KUN", name="Ayaneo Kun"): TQ(True, False, True),
+    TM("AYANEO 3", name="Ayaneo 3"): TQ(True, True, True),
+    TM("AYANEO 2S", name="Ayaneo 2S"): TQ(True, True, True),
+    TM("SuiPlay0X1", name="SuiPlay0X1"): TQ(True, True, True),
 }
 
 

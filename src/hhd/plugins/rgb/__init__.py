@@ -33,7 +33,9 @@ class RgbPlugin(HHDPlugin):
         self.uniq = None
         self.restore = None
         self.last_ev = None
+        self.restore_on_ac = False
 
+        self.init_times = RGB_SET_TIMES
         self.prev = None
 
     def open(
@@ -48,9 +50,13 @@ class RgbPlugin(HHDPlugin):
         for ev in events:
             # Certain ayaneo devices reset LEDs when being
             # plugged in
-            if ev["type"] == "acpi" and ev["event"] in ("ac", "dc"):
+            if (
+                self.restore_on_ac
+                and ev["type"] == "acpi"
+                and ev["event"] in ("ac", "dc")
+            ):
                 self.init = True
-                self.init_count = RGB_SET_TIMES - 1
+                self.init_count = self.init_times - 1
             elif ev["type"] == "special":
                 match ev["event"]:
                     case "tdp_cycle_quiet":
@@ -215,6 +221,9 @@ class RgbPlugin(HHDPlugin):
         rgb = ccap["rgb"]
         refresh_settings = False
         if rgb:
+            self.restore_on_ac = rgb.get("resets_on_ac", False)
+            self.init_times = rgb.get("init_times", None) or RGB_SET_TIMES
+
             # Refresh on initial load
             if not self.modes:
                 refresh_settings = True
@@ -246,7 +255,7 @@ class RgbPlugin(HHDPlugin):
             return
 
         curr = time.perf_counter()
-        init = False
+        init = self.init
 
         rgb_conf = conf["rgb"]["handheld"]["mode"]
         if self.prev and self.prev != rgb_conf:
@@ -254,7 +263,7 @@ class RgbPlugin(HHDPlugin):
         elif self.init:
             # Initialize by setting the LEDs X times
             # to avoid early boot having it not set
-            if self.init_count >= RGB_SET_TIMES:
+            if self.init_count >= self.init_times:
                 self.init = False
                 return
 
@@ -266,7 +275,7 @@ class RgbPlugin(HHDPlugin):
             self.init_count += 1
             self.init_last = curr
             logger.info(
-                f"Initializing RGB (repeat {self.init_count}/{RGB_SET_TIMES}, interval: {RGB_SET_INTERVAL})"
+                f"Initializing RGB (repeat {self.init_count}/{self.init_times}, interval: {RGB_SET_INTERVAL})"
             )
             init = True
         elif self.queue_leds and self.queue_leds < curr:
@@ -347,7 +356,7 @@ class RgbPlugin(HHDPlugin):
                 case "direction":
                     log += f", direction: {info['direction']}"
                     direction = cast(Literal["left", "right"], info["direction"])
-                case "oxp":
+                case "oxp" | "aok":
                     brightnessd = cast(
                         Literal["low", "medium", "high"], info["brightnessd"]
                     )
@@ -391,7 +400,7 @@ class RgbPlugin(HHDPlugin):
             "blue2": blue2,
             "oxp": oxp,
         }
-        if not always_init:
+        if not always_init and not init:
             self.queue_leds = curr + RGB_QUEUE_RGB
 
         # Avoid setting the LEDs too fast.

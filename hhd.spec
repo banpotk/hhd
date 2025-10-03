@@ -42,6 +42,7 @@ mkdir -p %{buildroot}%{_sysconfdir}/udev/hwdb.d
 install -m644 usr/lib/udev/hwdb.d/83-%{name}.hwdb %{buildroot}%{_sysconfdir}/udev/hwdb.d/83-%{name}.hwdb
 mkdir -p %{buildroot}%{_unitdir}
 install -m644 usr/lib/systemd/system/%{name}@.service %{buildroot}%{_unitdir}/%{name}@.service
+install -m644 usr/lib/systemd/system/%{name}.service %{buildroot}%{_unitdir}/%{name}.service
 
 %files
 %doc readme.md
@@ -51,3 +52,4 @@ install -m644 usr/lib/systemd/system/%{name}@.service %{buildroot}%{_unitdir}/%{
 %{_udevrulesdir}/83-%{name}.rules
 %{_sysconfdir}/udev/hwdb.d/83-%{name}.hwdb
 %{_unitdir}/%{name}@.service
+%{_unitdir}/%{name}.service

@@ -13,6 +13,7 @@ from hhd.plugins import (
     load_relative_yaml,
 )
 from hhd.plugins.settings import HHDSettings
+from hhd.i18n import _
 
 from .const import CONFS, DEFAULT_MAPPINGS, get_default_config
 
@@ -105,14 +106,15 @@ class GenericControllersPlugin(HHDPlugin):
             self.dconf.get("mapping", DEFAULT_MAPPINGS)
         )
 
-        if not self.dconf.get("x1", False):
-            del base["controllers"]["oxp"]["children"]["volume_reverse"]
-            # Maybe it is helpful for OneXFly users
-            # del base["controllers"]["oxp"]["children"]["swap_face"]
+        if self.dconf.get("aok", False):
+            base["controllers"]["oxp"]["title"] = _("AOKZOE Controller")
 
         if not self.turbo:
             del base["controllers"]["oxp"]["children"]["extra_buttons"]
             del base["controllers"]["oxp"]["children"]["turbo_reboots"]
+        elif self.dconf.get("g1"):
+            # No Keyboard button means turbo needs to do combo
+            del base["controllers"]["oxp"]["children"]["extra_buttons"]
 
         return base
 
@@ -184,5 +186,8 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
     # Begin hw agnostic dmi match
     if "ONEXPLAYER" in dmi:
         return [GenericControllersPlugin(dmi, get_default_config(dmi, "ONEXPLAYER"))]
+
+    if "AOKZOE" in dmi:
+        return [GenericControllersPlugin(dmi, get_default_config(dmi, "AOKZOE"))]
 
     return []

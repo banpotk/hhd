@@ -4,19 +4,19 @@ import select
 import time
 from threading import Event as TEvent
 
-
-from hhd.controller import Multiplexer, DEBUG_MODE
+from hhd.controller import DEBUG_MODE, Multiplexer
 from hhd.controller.lib.hide import unhide_all
 from hhd.controller.physical.evdev import B as EC
 from hhd.controller.physical.evdev import GenericGamepadEvdev, enumerate_evs
+from hhd.controller.physical.hidraw import enumerate_unique
 from hhd.controller.physical.imu import CombinedImu, HrtimerTrigger
 from hhd.controller.virtual.uinput import UInputDevice
-from hhd.controller.physical.hidraw import enumerate_unique
 from hhd.plugins import Config, Context, Emitter, get_gyro_state, get_outputs
-from .serial import SerialDevice, get_serial
+
+from .const import BTN_MAPPINGS, BTN_MAPPINGS_NONTURBO, DEFAULT_MAPPINGS
 from .hid_v1 import OxpHidraw
 from .hid_v2 import OxpHidrawV2
-from .const import BTN_MAPPINGS, DEFAULT_MAPPINGS, BTN_MAPPINGS_NONTURBO
+from .serial import SerialDevice, get_serial
 
 FIND_DELAY = 0.1
 ERROR_DELAY = 0.3
@@ -44,7 +44,7 @@ XFLY_PID = 0xB001
 XFLY_PAGE = 0xFF01
 XFLY_USAGE = 0x0001
 
-BACK_BUTTON_DELAY = 0.1
+BUTTON_MIN_DELAY = 0.13
 
 RGB_MODES_FULL = {
     "disabled": [],
@@ -55,6 +55,11 @@ RGB_MODES_FULL = {
 RGB_MODES_STICKS = {
     "disabled": [],
     "oxp": ["oxp"],
+    "solid": ["color"],
+}
+RGB_MODES_STICKS_AOK = {
+    "disabled": [],
+    "aok": ["aok"],
     "solid": ["color"],
 }
 
@@ -187,6 +192,49 @@ def plugin_run(
     unhide_all()
 
 
+class OxpAtKbd(GenericGamepadEvdev):
+    def __init__(self, *args, **kwargs):
+        super().__init__(
+            *args,
+            **kwargs,
+        )
+        self.state = {}
+        self.queued = []
+
+    def produce(self, fds):
+        evs = list(super().produce(fds))
+        curr = time.perf_counter()
+        skip = []
+
+        for i, ev in enumerate(evs):
+            if ev["type"] == "button" and ev["code"] in (
+                "mode",
+                "keyboard",
+            ):
+                if ev["value"]:
+                    self.state[ev["code"]] = curr
+                else:
+                    t = self.state.pop(ev["code"], None)
+
+                    if t and curr - t < BUTTON_MIN_DELAY:
+                        self.queued.append((ev["code"], t + BUTTON_MIN_DELAY))
+                        skip.append(i)
+
+        for i in reversed(skip):
+            evs.pop(i)
+
+        while self.queued and self.queued[0][1] < curr:
+            evs.append(
+                {
+                    "type": "button",
+                    "code": self.queued.pop(0)[0],
+                    "value": False,
+                }  # type: ignore
+            )
+
+        return evs
+
+
 def find_vendor(prepare, turbo, protocol: str | None):
     d_ser = SerialDevice(turbo=turbo, required=True)
     d_hidraw = OxpHidraw(
@@ -277,7 +325,10 @@ def turbo_loop(
     if dconf.get("rgb_secondary", False):
         rgb_modes = RGB_MODES_FULL
     elif dconf.get("rgb", True):
-        rgb_modes = RGB_MODES_STICKS
+        if dconf.get("aok", False):
+            rgb_modes = RGB_MODES_STICKS_AOK
+        else:
+            rgb_modes = RGB_MODES_STICKS
     else:
         rgb_modes = None
 
@@ -290,7 +341,7 @@ def turbo_loop(
         controller_disabled=True,
     )
 
-    d_kbd_1 = GenericGamepadEvdev(
+    d_kbd_1 = OxpAtKbd(
         vid=[KBD_VID],
         pid=[KBD_PID],
         required=False,
@@ -305,16 +356,18 @@ def turbo_loop(
     qam_no_release = False
     if conf.get("turbo_reboots", False):
         share_reboots = True
-    match conf.get("extra_buttons", "separate"):
-        case "separate":
-            keyboard_is = "steam_qam"
-            qam_hhd = True
-        case "combo":
-            keyboard_is = "qam"
-            qam_hhd = False
-        case "combo_hhd":
-            keyboard_is = "qam"
-            qam_hhd = True
+
+    if not dconf.get("g1", False):
+        match conf.get("extra_buttons", "separate"):
+            case "separate":
+                keyboard_is = "steam_qam"
+                qam_hhd = True
+            case "combo":
+                keyboard_is = "qam"
+                qam_hhd = False
+            case "combo_hhd":
+                keyboard_is = "qam"
+                qam_hhd = True
 
     multiplexer = Multiplexer(
         trigger="analog_to_discrete",
@@ -331,7 +384,7 @@ def turbo_loop(
         keyboard_no_release=not conf.get("swap_face", False),
     )
 
-    if dconf.get("x1", False) and conf.get("volume_reverse", False):
+    if conf.get("volume_reverse", False):
         logger.info("Reversing volume buttons.")
         btn_map = {
             "key_volumedown": EC("KEY_VOLUMEUP"),
@@ -408,6 +461,9 @@ def turbo_loop(
                 if d_id in to_run or d_id in d_vend_id:
                     evs.extend(d.produce(r))
 
+            # Read delayed events
+            evs.extend(d_kbd_1.produce([]))
+
             evs = multiplexer.process(evs)
             if evs:
                 if debug:
@@ -447,15 +503,24 @@ def controller_loop(
 ):
     debug = DEBUG_MODE
 
+    if dconf.get("rgb_secondary", False):
+        rgb_modes = RGB_MODES_FULL
+    elif dconf.get("rgb", True):
+        if dconf.get("aok", False):
+            rgb_modes = RGB_MODES_STICKS_AOK
+        else:
+            rgb_modes = RGB_MODES_STICKS
+    else:
+        rgb_modes = None
+
     # Output
     d_producers, d_outs, d_params = get_outputs(
         conf["controller_mode"],
         None,
         conf["imu"].to(bool),
         emit=emit,
-        rgb_modes=(
-            RGB_MODES_FULL if dconf.get("rgb_secondary", False) else RGB_MODES_STICKS  # type: ignore
-        ),
+        rgb_modes=rgb_modes,  # type: ignore
+        extra_buttons=dconf.get("extra_buttons", "dual"),
     )
     motion = d_params.get("uses_motion", True)
 
@@ -484,7 +549,7 @@ def controller_loop(
     else:
         mappings = BTN_MAPPINGS_NONTURBO
 
-    d_kbd_1 = GenericGamepadEvdev(
+    d_kbd_1 = OxpAtKbd(
         vid=[KBD_VID],
         pid=[KBD_PID],
         required=False,
@@ -537,7 +602,7 @@ def controller_loop(
         keyboard_no_release=not conf.get("swap_face", False),
     )
 
-    if dconf.get("x1", False) and conf.get("volume_reverse", False):
+    if conf.get("volume_reverse", False):
         logger.info("Reversing volume buttons.")
         btn_map = {
             "key_volumedown": EC("KEY_VOLUMEUP"),
@@ -612,6 +677,9 @@ def controller_loop(
                 d_id = id(d)
                 if d_id in to_run or d_id in d_vend_id:
                     evs.extend(d.produce(r))
+
+            # Read delayed events
+            evs.extend(d_kbd_1.produce([]))
 
             evs = multiplexer.process(evs)
             if evs:

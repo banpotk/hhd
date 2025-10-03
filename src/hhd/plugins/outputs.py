@@ -38,8 +38,11 @@ def get_outputs(
     dual_motion: bool = False,
     rgb_modes: Mapping[RgbMode, Sequence[RgbSettings]] | None = None,
     rgb_zones: RgbZones = "mono",
+    rgb_resets_on_ac: bool = False,
     controller_disabled: bool = False,
     touchpad_enable: Literal["disabled", "gamemode", "always"] | None = None,
+    rgb_init_times: int | None = None,
+    extra_buttons: Literal["none", "dual", "quad"] = "dual",
 ) -> tuple[Sequence[Producer], Sequence[Consumer], Mapping[str, Any]]:
     producers = []
     consumers = []
@@ -61,9 +64,7 @@ def get_outputs(
         correction = "stretch"
 
     # Run steam check for touchpad
-    steam_check = (
-        is_steam_gamepad_running(emit.ctx) if emit and desktop_disable else None
-    )
+    steam_check = is_steam_gamepad_running() if desktop_disable else None
     match steam_check:
         case True:
             logger.info("Gamepadui active. Activating touchpad emulation.")
@@ -157,7 +158,16 @@ def get_outputs(
                 flip_z = conf["hori_steam.flip_z"].to(bool)
                 button_map = HORIPAD_STEAM_BUTTON_MAP
                 bus = 0x06
-                version = 0
+                if noob_mode:
+                    version = 1
+                else:
+                    match extra_buttons:
+                        case "none":
+                            version = 1
+                        case "dual":
+                            version = 2
+                        case _: # "quad"
+                            version = 3
                 sync_gyro = conf.get("hori_steam.sync_gyro", True)
                 has_qam = True
             elif controller == "xbox_elite" or (
@@ -190,6 +200,7 @@ def get_outputs(
                 version=version,
                 cache=True,
                 sync_gyro=sync_gyro and motion,
+                gyro=motion,
             )
             producers.append(d)
             consumers.append(d)
@@ -261,14 +272,16 @@ def get_outputs(
             "rgb_zones": rgb_zones,
             "is_dual": False,
             "steam_check": steam_check,
-            "steam_check_fn": lambda: emit and is_steam_gamepad_running(emit.ctx),
-            "steam_kbd": lambda open: open_steam_kbd(emit, open),
+            "steam_check_fn": lambda: is_steam_gamepad_running(),
+            "steam_kbd": lambda open: open_steam_kbd(open),
             "nintendo_qam": nintendo_qam,
             "uses_motion": motion,
             "uses_dual_motion": dual_motion,
             "noob_mode": noob_mode,
             "has_qam": has_qam,
             "supports_qam": not controller_disabled and controller != "hidden",
+            "rgb_resets_on_ac": rgb_resets_on_ac,
+            "rgb_init_times": rgb_init_times,
         },
     )
 
@@ -279,6 +292,7 @@ def get_outputs_config(
     start_disabled: bool = False,
     default_device: str | None = None,
     extra_buttons: Literal["none", "dual", "quad"] = "dual",
+    noob_default: bool = True,
 ):
     s = load_relative_yaml("outputs.yml")
     try:
@@ -287,10 +301,15 @@ def get_outputs_config(
         if not has_leds:
             del s["modes"]["dualsense"]["children"]["led_support"]
 
+        if not noob_default:
+            s["modes"]["hidden"]["children"]["noob_mode"]["default"] = False
+            s["modes"]["uinput"]["children"]["paddles_as"]["default"] = "steam_input"
+
         if extra_buttons == "none":
             del s["modes"]["dualsense"]["children"]["paddles_as"]
             del s["modes"]["uinput"]["children"]["paddles_as"]
             del s["modes"]["hidden"]["children"]["noob_mode"]
+            del s["modes"]["hori_steam"]["children"]["noob_mode"]
             del s["modes"]["xbox_elite"]
         elif extra_buttons == "dual":
             del s["modes"]["dualsense"]["children"]["paddles_as"]["options"]["both"]

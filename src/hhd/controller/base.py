@@ -32,7 +32,11 @@ class SpecialEvent(TypedDict):
         "overlay",
         # Shortcuts
         "xbox_b",
+        "xbox_b_internal",
         "xbox_y",
+        "xbox_y_internal",
+        "xbox_a",
+        "xbox_x",
         "kbd_meta_press",
         "kbd_meta_hold",
         "swipe_left_top",
@@ -45,8 +49,13 @@ class SpecialEvent(TypedDict):
         "tdp_cycle_balanced",
         "tdp_cycle_performance",
         "tdp_cycle_custom",
+        "tdp_cycle",
         # Sleep information
         "wakeup",
+        # General Events
+        "brightness_changed",
+        "custom_armoury",
+        "custom_fan",
         # Powerbutton presses
         "pbtn_short",
         "pbtn_long",
@@ -166,6 +175,8 @@ class ConfigurationEvent(TypedDict):
 class RgbCapabilities(TypedDict):
     modes: dict[RgbMode, Sequence[RgbSettings]] | None
     controller: bool
+    resets_on_ac: bool
+    init_times: NotRequired[int | None]
     zones: RgbZones
 
 
@@ -244,8 +255,9 @@ class ControllerEmitter:
                     )
                     self.grab(False)
                     return False
-                elif evs and self._controller_cb:
-                    self._controller_cb(cid, evs)
+                elif self._controller_cb:
+                    if evs:
+                        self._controller_cb(cid, evs)
                     return True
                 else:
                     return False
@@ -545,6 +557,8 @@ class Multiplexer:
                 "guide_is_select",
                 "select_is_guide",
                 "start_is_keyboard",
+                "aya_traditional",
+                "aya_traditional_rev",
             ]
         ) = None,
         trigger: None | Literal["analog_to_discrete", "discrete_to_analogue"] = None,
@@ -560,7 +574,7 @@ class Multiplexer:
         ) = None,
         status: None | Literal["both_to_main"] = None,
         share_to_qam: bool = False,
-        trigger_discrete_lvl: float = 0.99,
+        trigger_discrete_lvl: float = 0.8,
         touchpad_short: TouchpadAction = "disabled",
         touchpad_right: TouchpadAction = "left_click",
         touchpad_hold: TouchpadAction = "disabled",
@@ -655,6 +669,8 @@ class Multiplexer:
                     "modes": rgb_modes,
                     "controller": uses_rgb,
                     "zones": rgb_zones,
+                    "resets_on_ac": params.get("rgb_resets_on_ac", False),
+                    "init_times": params.get("rgb_init_times", None),
                 }
             self.emit.set_capabilities(
                 self.unique,
@@ -680,10 +696,10 @@ class Multiplexer:
             if ev == "reboot":
                 if self.reboot_is_held:
                     try:
-                        import os
+                        import subprocess
 
-                        os.system("systemctl reboot")
-                        logger.info("rebooting")
+                        subprocess.run(["reboot"])
+                        logger.info("Rebooting")
                     except Exception as e:
                         logger.error(f"Rebooting failed with error:\n{type(e)}:{e}")
             elif self.reboot_is_held or not ev.get("from_reboot", False):
@@ -946,6 +962,10 @@ class Multiplexer:
                             # the arguments do not make sense.
                             case "start":
                                 match self.swap_guide:
+                                    case "aya_traditional":
+                                        ev["code"] = "select"
+                                    case "aya_traditional_rev":
+                                        ev["code"] = "mode"
                                     case "start_is_keyboard":
                                         ev["code"] = "keyboard"
                                     case "select_is_guide":
@@ -954,6 +974,10 @@ class Multiplexer:
                                         ev["code"] = "mode"
                             case "select":
                                 match self.swap_guide:
+                                    case "aya_traditional":
+                                        ev["code"] = "mode"
+                                    case "aya_traditional_rev":
+                                        pass
                                     case "start_is_keyboard":
                                         ev["code"] = "mode"
                                     case "select_is_guide":
@@ -961,12 +985,21 @@ class Multiplexer:
                                     case _:
                                         ev["code"] = "share"
                             case "mode":
-                                if self.swap_guide == "guide_is_start":
-                                    ev["code"] = "start"
-                                else:
-                                    ev["code"] = "select"
+                                match self.swap_guide:
+                                    case "aya_traditional":
+                                        ev["code"] = "start"
+                                    case "aya_traditional_rev":
+                                        ev["code"] = "keyboard"
+                                    case "guide_is_start":
+                                        ev["code"] = "start"
+                                    case _:
+                                        ev["code"] = "select"
                             case "share":
                                 match self.swap_guide:
+                                    case "aya_traditional":
+                                        pass
+                                    case "aya_traditional_rev":
+                                        pass
                                     case "start_is_keyboard":
                                         pass
                                     case "guide_is_start":
@@ -974,8 +1007,11 @@ class Multiplexer:
                                     case _:
                                         ev["code"] = "start"
                             case "keyboard":
-                                if self.swap_guide == "start_is_keyboard":
-                                    ev["code"] = "start"
+                                match self.swap_guide:
+                                    case "start_is_keyboard":
+                                        ev["code"] = "start"
+                                    case "aya_traditional_rev":
+                                        ev["code"] = "start"
 
                     if (
                         self.startselect_chord != "disabled" and ev["code"] == "select"
@@ -1269,7 +1305,7 @@ class Multiplexer:
                         and ev["code"] == "y"
                         and ev["value"]
                     ):
-                        self.emit({"type": "special", "event": "xbox_y"})
+                        self.emit({"type": "special", "event": "xbox_y_internal"})
 
                     # Assume we can only use Xbox + B for short presses
                     if (
@@ -1284,7 +1320,7 @@ class Multiplexer:
                                 self.send_xbox_b
                                 and time.time() - self.send_xbox_b < 0.3
                             ):
-                                self.emit({"type": "special", "event": "xbox_b"})
+                                self.emit({"type": "special", "event": "xbox_b_internal"})
                             self.send_xbox_b = None
 
                     # Apply start/select qam

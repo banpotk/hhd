@@ -78,6 +78,7 @@ AYANEO_BTN_MAPPINGS: dict[int, str] = {
     B("KEY_VOLUMEDOWN"): "key_volumedown",
     # Air Plus mappings
     B("KEY_F17"): "mode",  # Big Button
+    B("KEY_F18"): "share",  # Small Button # Maybe?
     B("KEY_D"): "share",  # Small Button
     B("KEY_F15"): "extra_l1",  # LC Button
     B("KEY_F16"): "extra_r1",  # RC Button
@@ -94,6 +95,15 @@ AYANEO_BTN_MAPPINGS: dict[int, str] = {
     # Air mappings
     B("KEY_F11"): "extra_l1",  # LC Button [87, 97, 125] F11 + LCTRL + LMETA
     B("KEY_F10"): "extra_r1",  # Rc Button [68, 97, 125] F10 + LCTRL + LMETA
+    # Ayaneo 3 mappings
+    B("KEY_F23"): "share",
+}
+
+SUI_BUTTONS = {
+    B("KEY_F17"): "mode",  # Big Button
+    B("KEY_F18"): "share",  # Small Button
+    B("KEY_F15"): "extra_l1",  # LC Button
+    B("KEY_F16"): "extra_r1",  # RC Button
 }
 
 AYA_DEFAULT_CONF = {
@@ -119,6 +129,12 @@ CONFS = {
         "mapping": gen_gyro_state("x", False, "z", False, "y", True),
         "extra_buttons": "none",
     },
+    "Zeenix Pro": {
+        "name": "Zeenix Pro",
+        "hrtimer": True,
+        "mapping": gen_gyro_state("x", False, "z", False, "y", True),
+        "extra_buttons": "none",
+    },
     "Loki Zero": {
         "name": "Loki Zero",
         "hrtimer": True,
@@ -135,12 +151,22 @@ CONFS = {
     "AIR 1S Limited": {"name": "AIR 1S Limited", **AYA_DEFAULT_CONF},
     "AYANEO 2": {"name": "AYANEO 2", **AYA_DEFAULT_CONF},
     "AYANEO 2S": {"name": "AYANEO S2", **AYA_DEFAULT_CONF},
+    "SuiPlay0X1": {
+        "name": "SuiPlay0X1",
+        "hrtimer": True,
+        "mapping": AYANEO_DEFAULT_MAPPINGS,
+        "btn_mapping": SUI_BUTTONS,
+        "grab_at": False,
+    },
+    # by sys_vendor: "Mysten Labs, Inc."
     "GEEK": {"name": "AYANEO GEEK", **AYA_DEFAULT_CONF},
     "GEEK 1S": {"name": "AYANEO GEEK 1S", **AYA_DEFAULT_CONF},
     "AIR": {"name": "AYANEO AIR", **AYA_DEFAULT_CONF},
     "AIR Pro": {"name": "AYANEO AIR Pro", **AYA_DEFAULT_CONF},
     "FLIP DS": {"name": "AYANEO FLIP DS", **AYA_DEFAULT_CONF},
     "FLIP KB": {"name": "AYANEO FLIP KB", **AYA_DEFAULT_CONF},
+    "FLIP 1S DS": {"name": "AYANEO FLIP 1S DS", **AYA_DEFAULT_CONF},
+    "FLIP 1S KB": {"name": "AYANEO FLIP 1S KB", **AYA_DEFAULT_CONF},
     "NEXT Advance": {"name": "AYANEO NEXT Advance", **AYA_DEFAULT_CONF},
     "NEXT Lite": {"name": "AYANEO NEXT Lite", **AYA_DEFAULT_CONF},
     "NEXT Pro": {"name": "AYANEO NEXT Pro", **AYA_DEFAULT_CONF},

@@ -1,11 +1,11 @@
-controller:
+custom:
   type: container
   tags: [non-essential]
-  title: "All Controllers"
+  title: "Device Buttons"
   children:
-    xbox_b:
+    armoury:
       type: multiple
-      title: "Xbox or View + B (Press)"
+      title: "Armoury Crate"
       options: &shortcuts
         disabled: "Disabled"
         keyboard: Steam Keyboard
@@ -13,17 +13,49 @@ controller:
         steam_expanded: "Steam Overlay"
         hhd_qam: "HHD Side Menu"
         hhd_expanded: "HHD Overlay"
+        tdp_cycle: "Cycle TDP"
         # screenshot: "Screenshot"
-      # default: hhd_qam
-      default: disabled
+      default: hhd_expanded
+    fan:
+      type: multiple
+      title: "Fan Key"
+      options: *shortcuts
+      default: tdp_cycle
+controller:
+  type: container
+  tags: [non-essential]
+  title: "External Controllers"
+  children:
     xbox_y:
       type: multiple
-      title: "Xbox or View + Y"
+      title: "Xbox + Y"
       options: 
         <<: *shortcuts
         disconnect: Disconnect Controller
       # default: disconnect
+      default: tdp_cycle
+    xbox_b:
+      type: multiple
+      title: "Xbox + B"
+      options: *shortcuts
+      # default: hhd_qam
+      default: hhd_expanded
+    xbox_a:
+      type: multiple
+      title: "Xbox + A"
+      options: *shortcuts
+      # default: hhd_qam
       default: disabled
+    xbox_x:
+      type: multiple
+      title: "Xbox + X"
+      options: *shortcuts
+      # default: hhd_qam
+      default: disabled
+    allow_select:
+      type: bool
+      title: "Use Select as alternative to Xbox"
+      default: true
 touchscreen:
   type: container
   tags: [non-essential]
@@ -115,13 +147,3 @@ keyboard:
       title: "Ctrl + 4"
       options: *shortcuts
       default: hhd_qam
-custom:
-  type: container
-  tags: [non-essential]
-  title: "Device Buttons"
-  children:
-    armoury:
-      type: multiple
-      title: "Armoury Crate"
-      options: *shortcuts
-      default: hhd_expanded
