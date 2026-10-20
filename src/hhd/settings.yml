@@ -16,6 +16,7 @@ settings:
         zh_TW: Traditional Chinese
         pt_BR: Portugese (Brazil)
         ru_RU: Russian
+        ko: Korean
 
     theme:
       type: multiple
@@ -39,28 +40,16 @@ settings:
       hint: >-
         Resets all Handheld Daemon settings to their default values.
 
-    decky_deprecation:
-      type: display
-      tags: [hhd-version-display-decky, text]
-      title: "It is no longer possible to update Decky from here. If you see this, update the Decky plugin manually."
-      default: " "
-
     version:
       type: display
       tags: [hhd-version-display, text]
-      title: Handheld Daemon Version
+      title: Version
       hint: "Displays the Handheld Daemon version."
 
     version_ui:
       type: display
       tags: [hhd-version-display, text]
-      title: Handheld Daemon UI Version
-      hint: "Displays the Handheld Daemon version."
-
-    version_adj:
-      type: display
-      tags: [hhd-version-display, text]
-      title: Adjustor (TDP) Version
+      title: UI Version
       hint: "Displays the Handheld Daemon version."
 
     update_stable:

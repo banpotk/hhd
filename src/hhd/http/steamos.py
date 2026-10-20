@@ -1,159 +1,169 @@
-import argparse
 import sys
-import time
-from .ctl import get_state, set_state, unroll_dict
+from .ctl import get_state, set_state, unroll_dict, send_event
 
 SOCKET_UNIX = "/run/hhd/api"
 USAGE = """
-hhd.steamos [-h] {steamos-select-branch,steamos-update} [--fallback] [keys ...]
+hhd.steamos [-h] {steamos-tdp,steamos-gpu} [--fallback] [keys ...]
 
 Handheld Daemon steamos polkit stub
-Allows mimicking the polkit behavior of SteamOS to perform updates, etc.
-For specifics, refer to SteamOS. The --fallback option is provided which will
-return 20 if handheld daemon cannot update the system. In this case, you can
-use the legacy fallback to update the system.
-
-Commands:
-    steamos-select-branch: Select a branch that running steamos-update will update to.
-        Aliased to steamos-branch-select. Options are: rel, rc, beta, main, bc, -l, -c.
-    steamos-update: Perform an update. 
-
+Used for steamos-manager to forward tdp to the steam client.
 """
-
 
 ALL = {
     "set_state": set_state,
     "get_state": get_state,
+    "send_event": send_event,
 }
 
-BRANCH_MAP = {
-    "rel": "stable",
-    "beta": "testing",
-    "preview": "testing",
-    "rc": "testing",
-    "bc": "unstable",
-    "pc": "unstable",
-    "main": "unstable",
-}
 
-FALLBACK_CODE = 20
+def _tdp(opts):
+    # Return statuses:
+    # 1: generic error, fallback to steamos manager
+    # 2: conflict with another application, disable all controls
+    # 3: failed to set tdp, ignore and retry
 
+    if not opts:
+        print(
+            "Either provide a tdp value (e.g. 15) or get for the current limits",
+            file=sys.stderr,
+        )
+        return -1
 
-def _select_branch(fallback, opts):
-    branch = "stable"
     try:
         state = unroll_dict(get_state())
-        stage = state.get("updates.bootc.steamos-update", None)
-        # print(f"Stage: {stage}", file=sys.stderr)
-        incompatible = stage is None or stage == "incompatible"
+        status = state.get("hhd.steamos.tdp_status", None)
+        min = state.get("hhd.steamos.tdp_min", None)
+        max = state.get("hhd.steamos.tdp_max", None)
+        was_set = state.get("hhd.steamos.tdp_set", None)
+        default = state.get("hhd.steamos.tdp_default", None)
 
-        img = state.get("updates.bootc.image", None).split(":")[-1]
-        assert img is not None
-        for k, v in BRANCH_MAP.items():
-            if img.startswith(v):
-                branch = k
-                break
+        if status == "conflict":
+            print(
+                "TDP management conflict with another application. Disable controls.",
+                file=sys.stderr,
+            )
+            return 2
+        elif status != "enabled":
+            print(
+                "TDP management disabled. Fallback to steamos manager.", file=sys.stderr
+            )
+            return 1
     except Exception as e:
-        incompatible = True
         print(f"Error: {e}", file=sys.stderr)
-    if incompatible and fallback:
-        return FALLBACK_CODE
+        return 1
 
-    if "-c" in opts:
-        print(branch)
-        return 0
-    if "-l" in opts:
-        for v in BRANCH_MAP.keys():
-            print(v)
+    if not max:
+        return 1
+
+    if opts[0] == "get":
+        print(f"{min} {max} {default}")
         return 0
 
-    if not opts:
-        print("No option provided", file=sys.stderr)
+    if str(max) == opts[0] and not was_set:
+        # Skip setting max_tdp if tdp was not
+        # set previously
         return 0
 
-    if incompatible:
-        print("Incompatible state", file=sys.stderr)
-        return 0
+    try:
+        send_event(
+            {
+                "type": "tdp",
+                "tdp": int(opts[0]),
+            }
+        )
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 3
 
-    if not opts:
-        return 0
-
-    target = opts[0]
-    if target == branch:
-        return 0
-
-    target_os = None
-    for k, v in BRANCH_MAP.items():
-        if target == k:
-            target_os = v
-            break
-
-    if target_os is None:
-        print(f"Invalid branch: {target}", file=sys.stderr)
-        return 0
-    
-    print("Ignoring request to rebase from SteamOS", file=sys.stderr)
     return 0
 
 
-def _update(fallback, opts):
-    if "--supports-duplicate-detection" in opts:
-        return 0
+def _gpu(opts):
+    # Return statuses:
+    # 1: generic error, fallback to steamos manager
+    # 2: conflict with another application, disable all controls
+    # 3: failed to set tdp, ignore and retry
+    # 5: retry a few times and return 1
 
-    check = "check" in opts
-
-    # Check if there is an update
-    try:
-        if unroll_dict(get_state()).get("updates.bootc.steamos-update", None) in (
-            "incompatible",
-            None,
-        ):
-            print("Incompatible state", file=sys.stderr)
-            return FALLBACK_CODE if fallback else 0
-
-        val = unroll_dict(set_state({"updates.bootc.steamos-update": "check"})).get(
-            "updates.bootc.steamos-update", None
+    if not opts:
+        print(
+            "Either provide a tdp value (e.g. 15) or get for the current limits",
+            file=sys.stderr,
         )
-        while val == "check":
-            val = unroll_dict(get_state(poll=True)).get(
-                "updates.bootc.steamos-update", None
+        return -1
+
+    try:
+        state = unroll_dict(get_state())
+        min = state.get("hhd.steamos.gpu_min", None)
+        max = state.get("hhd.steamos.gpu_max", None)
+        status = state.get("hhd.steamos.gpu_status", None)
+        was_set = state.get("hhd.steamos.gpu_set", None)
+
+        if status == "conflict":
+            print(
+                "GPU management conflict with another application. Disable controls.",
+                file=sys.stderr,
             )
+            return 2
+        elif status != "enabled":
+            print(
+                "GPU management disabled. Fallback to steamos manager.", file=sys.stderr
+            )
+            return 1
+        if min is None or max is None:
+            print(
+                "GPU slider is not available. Fallback to steamos manager.",
+                file=sys.stderr,
+            )
+            return 1
+
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        if fallback:
-            return FALLBACK_CODE
         return 1
 
-    if val != "has-update" and not (val and val.endswith("%")):
-        print(f"No updates available ({val})", file=sys.stderr)
-        return 7
-    elif check:
-        print(f"Updates available ({val})", file=sys.stderr)
+    if opts[0] == "get":
+        print(f"{min} {max}")
         return 0
 
-    # Otherwise apply, bootc does not need separate steps
-    if not val or not val.endswith("%"):
-        val = unroll_dict(set_state({"updates.bootc.steamos-update": "apply"})).get(
-            "updates.bootc.steamos-update", None
+    actual_max = max
+
+    if opts[0] != "clear":
+        try:
+            min = int(opts[0])
+        except ValueError:
+            min = None
+
+        try:
+            max = int(opts[1])
+        except IndexError:
+            max = min
+            min = None
+        except ValueError:
+            max = None
+    else:
+        min = max = None
+
+    if str(max) == str(actual_max):
+        if not was_set:
+            # Skip setting gpu if tdp was not
+            # set previously
+            return 0
+        else:
+            # Clear gpu settings
+            min = max = None
+
+    try:
+        send_event(
+            {
+                "type": "gpu",
+                "min": min,
+                "max": max,
+            }
         )
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 3
 
-    curr = 0.2
-    while not val or "%" in val or val == "apply":
-        if val and val.endswith("%"):
-            next = float(val[:-1])
-            while curr < next:
-                # print(f"\r\033[K\r{curr:.2f}% 1m1s", end="")
-                print(f"\r{curr:.2f}%", end="")
-                sys.stdout.flush()
-                curr += min(5, next - curr)
-                time.sleep(0.2)
-
-        val = unroll_dict(get_state(poll=True)).get(
-            "updates.bootc.steamos-update", None
-        )
-
-    if val != "updated":
-        return 1
     return 0
 
 
@@ -169,10 +179,10 @@ def main():
 
         opts = [v for v in sys.argv[2:] if v != "--fallback"]
         match cmd:
-            case "steamos-branch-select" | "steamos-select-branch":
-                v = _select_branch(fallback, opts)
-            case "steamos-update":
-                v = _update(fallback, opts)
+            case "steamos-tdp":
+                v = _tdp(opts)
+            case "steamos-gpu":
+                v = _gpu(opts)
             case _:
                 print(f"Invalid command: '{cmd}'")
                 v = -1

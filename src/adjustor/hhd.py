@@ -1,0 +1,368 @@
+import logging
+import os
+from threading import Event as TEvent
+from threading import Thread
+from typing import Sequence
+
+from hhd.plugins import Context, HHDPlugin, HHDSettings, load_relative_yaml
+from hhd.plugins.conf import Config
+from hhd.plugins.plugin import Emitter
+
+from adjustor.core.acpi import check_perms, initialize
+from adjustor.core.const import CPU_DATA, DEV_DATA, ASUS_DATA, MSI_DATA
+from adjustor.decky import disable_decky_plugins, find_decky_plugins
+
+from .i18n import _
+
+logger = logging.getLogger(__name__)
+
+USE_UNIFIED = os.environ.get("HHD_ADJUSTOR_NEXT", "0") == "1"
+
+
+class AdjustorInitPlugin(HHDPlugin):
+    def __init__(
+        self,
+        min_tdp: int,
+        default_tdp: int,
+        max_tdp: int,
+        use_acpi_call: bool = True,
+    ) -> None:
+        self.name = f"adjustor_init"
+        self.priority = 5
+        self.log = "adjs"
+        self.init = False
+        self.failed = False
+        self.has_decky = False
+        self.enabled = False
+        self.action_enabled = False
+        self.use_acpi_call = use_acpi_call
+
+        self.enabled = False
+        self.enfoce_limits = True
+
+        self.t = None
+        self.should_exit = None
+
+        self.min_tdp = min_tdp
+        self.default_tdp = default_tdp
+        self.max_tdp = max_tdp
+        self.tdp_set = None
+
+    def open(self, emit: Emitter, context: Context):
+        self.context = context
+        self.emit = emit
+
+    def settings(self):
+        v = load_relative_yaml("settings.yml")
+        sets = {
+            "hhd": {"settings": v["hhd"], "steamos": v["steamos"]},
+        }
+        if os.environ.get("HHD_ADJ_ENABLE_TDP"):
+            sets["hhd"]["settings"]["children"]["tdp_enable"]["default"] = True
+
+        if self.enabled and not self.failed:
+            self.action_enabled = False
+        else:
+            self.action_enabled = True
+            sets["tdp"] = {"tdp": v["tdp"]}
+            if not self.has_decky:
+                del sets["tdp"]["tdp"]["children"]["decky_info"]
+                del sets["tdp"]["tdp"]["children"]["decky_remove"]
+
+        return sets
+
+    def update(self, conf: Config):
+        if (
+            self.action_enabled
+            and self.has_decky
+            and conf.get_action("tdp.tdp.decky_remove")
+        ):
+            # Preparation
+            logger.warning("Removing Decky plugins")
+            conf["hhd.settings.tdp_enable"] = True
+            self.has_decky = False
+            self.failed = False
+            disable_decky_plugins()
+
+            # TDP controls are already enabled.
+            logger.warning(f"Enabling TDP controls.")
+            self.emit({"type": "settings"})
+        
+        if self.action_enabled and conf.get_action("tdp.tdp.tdp_enable"):
+            conf["hhd.settings.tdp_enable"] = True
+            self.failed = False
+
+        enabled = conf.get("hhd.settings.tdp_enable", False)
+        
+        if not enabled:
+            conf["hhd.settings.tdp_ready"] = False
+            conf["hhd.steamos.tdp_status"] = "disabled"
+            conf["hhd.steamos.tdp_min"] = None
+            conf["hhd.steamos.tdp_default"] = None
+            conf["hhd.steamos.tdp_max"] = None
+            self.init = False
+
+        if self.enabled != enabled:
+            self.emit({"type": "settings"})
+            if not enabled:
+                self.enabled = False
+                self._stop()
+        self.enabled = enabled
+
+        if not enabled:
+            return
+        
+        new_enforce_limits = conf["hhd.settings.enforce_limits"].to(bool)
+        if new_enforce_limits != self.enfoce_limits:
+            self.emit({"type": "settings"})
+        self.enfoce_limits = new_enforce_limits
+
+        # If steam sets a value other than max TDP, assume TDP slider
+        # is enabled. Then, disable it again when max TDP is set but
+        # allow max TDP to be set normally to reset it.
+        if self.tdp_set is not None:
+            conf["hhd.steamos.tdp_set"] = self.tdp_set
+
+        if self.init or not enabled or self.failed:
+            return
+
+        decky_plugins = find_decky_plugins()
+        if decky_plugins:
+            plugin = decky_plugins[0]
+            err = f'Found "{plugin.name}" at:\n{plugin.path}\n' + _(
+                "Disable Decky TDP plugins using the button below to continue."
+            )
+            self.emit({"type": "settings"})
+            self.has_decky = True
+            conf["tdp.tdp.tdp_error"] = err
+            conf["hhd.settings.tdp_ready"] = False
+            conf["hhd.steamos.tdp_status"] = "conflict"
+            logger.error(err)
+            self.failed = True
+            self.enabled = False
+            self._stop()
+            return
+
+        if self.use_acpi_call:
+            initialize()
+            if not check_perms():
+                conf["hhd.settings.tdp_ready"] = False
+                conf["tdp.tdp.tdp_error"] = (
+                    "Can not write to 'acpi_call'. It is required for TDP."
+                )
+                self.failed = True
+                self.enabled = False
+                self._stop()
+                return
+        
+        self._start()
+        self.failed = False
+        self.init = True
+        conf["hhd.steamos.tdp_status"] = "enabled"
+        conf["hhd.steamos.tdp_min"] = self.min_tdp
+        conf["hhd.steamos.tdp_default"] = self.default_tdp
+        conf["hhd.steamos.tdp_max"] = self.max_tdp
+        conf["hhd.settings.tdp_ready"] = True
+        conf["tdp.tdp.tdp_error"] = ""
+
+    def _start(self):
+        if self.should_exit:
+            return
+        self.should_exit = TEvent()
+        if not self.t:
+            try:
+                from .events import loop_process_events
+
+                self.t = Thread(
+                    target=loop_process_events, args=(self.emit, self.should_exit)
+                )
+                self.t.start()
+            except Exception as e:
+                logger.warning(
+                    f"Could not init ACPI event handling. Is pyroute2 installed?"
+                )
+
+    def _stop(self):
+        if not self.should_exit:
+            return
+        self.should_exit.set()
+        if self.t:
+            self.t.join()
+            self.t = None
+        self.should_exit = None
+
+    def close(self):
+        self._stop()
+    
+    def notify(self, events: Sequence):
+        for ev in events:
+            if ev["type"] == "tdp":
+                self.tdp_set = ev["tdp"] != self.max_tdp
+
+LEGION_GO_DMIS = ["83E1"]
+LEGION_GO_2_DMIS = ["83N0", "83N1"]
+LEGION_GO_S_DMIS = ["83L3", "83N6", "83Q2", "83Q3"]
+
+
+def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
+    if os.environ.get("HHD_ADJ_DISABLE"):
+        return []
+
+    if len(existing):
+        return existing
+
+    from .drivers.asus import AsusDriverPlugin
+    from .drivers.lenovo import LenovoDriverPlugin
+    from .drivers.msi import MsiDriverPlugin
+    from .drivers.smu import SmuDriverPlugin, SmuQamPlugin
+    from .drivers.gpu import GpuPlugin
+    from .drivers.battery import BatteryPlugin
+    from .drivers.unified import UnifiedDriverPlugin
+
+    drivers = []
+    with open("/sys/devices/virtual/dmi/id/product_name") as f:
+        prod = f.read().strip()
+    with open("/sys/devices/virtual/dmi/id/board_name") as f:
+        board = f.read().strip()
+    with open("/proc/cpuinfo") as f:
+        cpuinfo = f.read().strip()
+
+    use_acpi_call = False
+    drivers_matched = False
+
+    # FIXME: Switch to per device
+    # But all devices use the same values
+    # pretty much
+    min_tdp = 4
+    default_tdp = 15
+    max_tdp = 30
+
+    for k, v in ASUS_DATA.items():
+        if k in prod:
+            drivers.append(AsusDriverPlugin(v))
+            drivers_matched = True
+            min_tdp = v["min_tdp"]
+            max_tdp = v["max_tdp"]
+            break
+
+    for k, v in MSI_DATA.items():
+        if k in board:
+            drivers.append(MsiDriverPlugin(v))
+            drivers_matched = True
+            min_tdp = v["min_tdp"]
+            max_tdp = v["max_tdp"]
+            break
+
+    if not drivers_matched and USE_UNIFIED:
+        driver = UnifiedDriverPlugin()
+        if driver.is_supported():
+            return [driver, GpuPlugin(), BatteryPlugin()]
+
+    if not drivers_matched and "GenuineIntel" in cpuinfo:
+        try:
+            with open("/sys/devices/virtual/dmi/id/board_vendor") as f:
+                vendor = f.read().strip().lower()
+        except OSError:
+            vendor = ""
+
+        if vendor == "gpd" or "one-netbook" in vendor:
+            from .core.rapl import get_rapl
+            from .drivers.intel import IntelDriverPlugin
+
+            if rapl := get_rapl(board):
+                drivers.append(IntelDriverPlugin(rapl))
+                drivers_matched = True
+                min_tdp = rapl.min_tdp
+                default_tdp = rapl.default_tdp
+                max_tdp = rapl.max_tdp
+
+    # Unified should take over Go TDP handling, even if partial
+    go_model = None
+    if prod in LEGION_GO_S_DMIS:
+        go_model = "gos"
+        max_tdp = 33
+    elif prod in LEGION_GO_DMIS:
+        go_model = "go"
+        max_tdp = 30
+    elif prod in LEGION_GO_2_DMIS:
+        go_model = "go2"
+        max_tdp = 35
+
+    if not drivers_matched and go_model and not bool(os.environ.get("HHD_ADJ_ALLY")) and not USE_UNIFIED:
+        drivers.append(LenovoDriverPlugin(go_model=go_model))
+        drivers_matched = True
+        use_acpi_call = True
+
+    if os.environ.get("HHD_ADJ_DEBUG") or os.environ.get("HHD_ENABLE_SMU"):
+        drivers_matched = False
+
+    if not drivers_matched and prod in DEV_DATA and not USE_UNIFIED:
+        dev, cpu, pp_enable, energy_map = DEV_DATA[prod]
+
+        try:
+            # Set values for the steam slider
+            if dev["skin_limit"].smin:
+                min_tdp = dev["skin_limit"].smin
+            if dev["skin_limit"].default:
+                default_tdp = dev["skin_limit"].default
+            if dev["skin_limit"].smax:
+                max_tdp = dev["skin_limit"].smax
+        except Exception as e:
+            logger.error(f"Failed to get TDP limits for {prod}:\n{e}")
+
+        pp_enable |= bool(os.environ.get("HHD_ADJ_DEBUG"))
+        drivers.append(
+            SmuDriverPlugin(
+                dev,
+                cpu,
+                platform_profile=pp_enable,
+            )
+        )
+        drivers.append(
+            SmuQamPlugin(
+                dev,
+                energy_map,
+                pp_enable=pp_enable,
+                init_tdp=not prod == "83E1",
+            ),
+        )
+        drivers_matched = True
+        use_acpi_call = True
+
+    if not drivers_matched and not USE_UNIFIED:
+        for name, (dev, cpu, energy_map) in CPU_DATA.items():
+            if name in cpuinfo:
+                drivers.append(
+                    SmuDriverPlugin(
+                        dev,
+                        cpu,
+                        platform_profile=True,
+                    )
+                )
+                drivers.append(
+                    SmuQamPlugin(dev, energy_map),
+                )
+                use_acpi_call = True
+                break
+
+    if not drivers and not USE_UNIFIED:
+        from .drivers.general import GeneralPowerPlugin
+
+        logger.info(f"No tdp drivers found for this device, using generic plugin.")
+
+        return [GeneralPowerPlugin(), BatteryPlugin(always_enable=True)]
+
+    if not drivers:
+        return []
+
+    return [
+        *drivers,
+        AdjustorInitPlugin(
+            use_acpi_call=use_acpi_call,
+            min_tdp=min_tdp,
+            default_tdp=default_tdp,
+            max_tdp=max_tdp,
+        ),
+        BatteryPlugin(),
+        GpuPlugin(),
+    ]

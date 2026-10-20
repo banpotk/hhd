@@ -6,11 +6,12 @@ if [ "$EUID" = 0 ]; then
   exit
 fi
 
-is_bazzite=$(cat /etc/os-release  | sed -e 's/\(.*\)/\L\1/' | grep bazzite-deck)
+is_bazzite=$(cat /etc/os-release  | sed -e 's/\(.*\)/\L\1/' | grep bazzite)
 if [ "${is_bazzite}" ]; then
-  echo "Handheld Daemon is preinstalled on bazzite-deck."
-  echo "If your device is not whitelisted, you can enable Handheld Daemon with the command:"
-  echo "sudo systemctl enable --now hhd@\$(whoami)"
+  echo "Installing Handheld Daemon on Bazzite is not supported."
+  echo
+  echo "For Handheld Daemon in desktop mode/gamemode you can use Anatase"
+  echo "https://docs.anatase.org/basics/install#rebasing-from-bazzite"
   exit
 fi
 
@@ -18,7 +19,15 @@ is_steamos=$(cat /etc/os-release  | grep ID=steamos)
 if [[ -n "${is_steamos}" && -z "${BYPASS_STEAMOS_CHECK}" ]]; then
   echo "Installing Handheld Daemon on SteamOS is not canon."
   echo
-  echo "Did you mean to install Bazzite? https://bazzite.gg"
+  echo "Did you mean to install Anatase? https://anatase.org"
+  exit
+fi
+
+is_anatase=$(cat /etc/os-release  | sed -e 's/\(.*\)/\L\1/' | grep anatase)
+if [ "${is_anatase}" ]; then
+  echo "Installing Handheld Daemon is preinstalled on Anatase."
+  echo
+  echo "Do not try to install it again. For issues, please head to Discord or the Issue tracker"
   exit
 fi
 

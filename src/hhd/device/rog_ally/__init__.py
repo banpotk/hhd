@@ -1,10 +1,11 @@
-from threading import Event, Thread
+from threading import Event as TEvent, Thread
 from typing import Any, Sequence
 
 from hhd.plugins import (
     Config,
     Context,
     Emitter,
+    Event,
     HHDPlugin,
     load_relative_yaml,
     get_outputs_config,
@@ -19,13 +20,18 @@ class RogAllyControllersPlugin(HHDPlugin):
     priority = 18
     log = "ally"
 
-    def __init__(self, ally_x: bool = False) -> None:
+    def __init__(
+        self, ally_x: bool = False, xbox: bool = False, x20: bool = False
+    ) -> None:
         self.t = None
         self.should_exit = None
-        self.updated = Event()
+        self.updated = TEvent()
+        self.woke_up = None
         self.started = False
         self.t = None
         self.ally_x = ally_x
+        self.xbox = xbox
+        self.x20 = x20
 
     def open(
         self,
@@ -41,11 +47,17 @@ class RogAllyControllersPlugin(HHDPlugin):
 
         base = {"controllers": {"rog_ally": load_relative_yaml("controllers.yml")}}
         base["controllers"]["rog_ally"]["children"]["controller_mode"].update(
-            get_outputs_config(can_disable=False, extra_buttons="dual")
+            get_outputs_config(
+                can_disable=False, extra_buttons="dual", noob_default=not self.xbox
+            )
         )
         base["controllers"]["rog_ally"]["children"]["limits"] = get_limits_config(
             LIMIT_DEFAULTS(self.ally_x)
         )
+        
+        if not self.xbox:
+            del base["controllers"]["rog_ally"]["children"]["swap_xbox"]
+
         return base
 
     def update(self, conf: Config):
@@ -72,7 +84,8 @@ class RogAllyControllersPlugin(HHDPlugin):
         self.started = True
 
         self.close()
-        self.should_exit = Event()
+        self.should_exit = TEvent()
+        self.woke_up = TEvent()
         self.t = Thread(
             target=plugin_run,
             args=(
@@ -82,6 +95,9 @@ class RogAllyControllersPlugin(HHDPlugin):
                 self.should_exit,
                 self.updated,
                 self.ally_x,
+                self.xbox,
+                self.woke_up,
+                self.x20,
             ),
         )
         self.t.start()
@@ -93,6 +109,12 @@ class RogAllyControllersPlugin(HHDPlugin):
         self.t.join()
         self.should_exit = None
         self.t = None
+
+    def notify(self, events: Sequence[Event]):
+        for ev in events:
+            if ev["type"] == "special" and ev.get("event", None) == "wakeup":
+                if self.woke_up:
+                    self.woke_up.set()
 
 
 def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
@@ -113,5 +135,20 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
     # ROG Ally X RC72LA_RC72LA_000123206
     if "ROG Ally X RC72LA" in dmi:
         return [RogAllyControllersPlugin(ally_x=True)]
+
+    # Xbox Ally
+    # ROG Xbox Ally RC73YA_RC73YA
+    # Xbox Ally X
+    # ROG Xbox Ally X RC73XA_RC73XA
+    if (
+        "ROG Xbox Ally X RC73X" in dmi
+        or "ROG Xbox Ally RC73Y" in dmi
+    ):
+        return [RogAllyControllersPlugin(ally_x=True, xbox=True)]
+
+    # Ally X20
+    # ROG XBOX Ally X RC74XA RC74XA
+    if "ROG XBOX Ally X RC74X" in dmi:
+        return [RogAllyControllersPlugin(ally_x=True, xbox=True, x20=True)]
 
     return []

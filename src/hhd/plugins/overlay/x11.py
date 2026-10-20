@@ -212,6 +212,34 @@ def apply_gamescope_config(display: display.Display, config: Config, prev: dict)
         prev["steamui_halfhz"] = halfhz
         apply = True
 
+    framegen = config.get("framegen", None)
+    framegen_rev = prev.get("framegen", None)
+    if framegen is not None and framegen != framegen_rev:
+        enabled = framegen == "enabled"
+        display.screen().root.change_property(
+            display.get_atom("GAMESCOPE_FRAME_GENERATION_ENABLED"),
+            Xatom.CARDINAL,
+            32,
+            [int(enabled)],
+        )
+        logger.info(f"Setting frame generation enabled to {enabled}.")
+        prev["framegen"] = framegen
+        apply = True
+
+    framegen_quality = config.get("framegen_quality", None)
+    framegen_quality_rev = prev.get("framegen_quality", None)
+    if framegen_quality is not None and framegen_quality != framegen_quality_rev:
+        flow_scale = max(1, min(10, int(framegen_quality))) * 10
+        display.screen().root.change_property(
+            display.get_atom("GAMESCOPE_FRAME_GENERATION_FLOW_SCALE"),
+            Xatom.CARDINAL,
+            32,
+            [flow_scale],
+        )
+        logger.info(f"Setting frame generation optical flow scale to {flow_scale}%.")
+        prev["framegen_quality"] = framegen_quality
+        apply = True
+
     if apply:
         display.flush()
 
@@ -257,7 +285,7 @@ def register_changes(display, win):
 
 
 def find_hhd(display: display.Display):
-    return find_win(display, ["dev.hhd.hhd-ui"])
+    return find_win(display, ["dev.hhd.hhd-ui"]) or find_win(display, ["dev-hhd-hhd-ui"])
 
 
 def find_steam(display: display.Display):
@@ -335,9 +363,9 @@ def prepare_hhd(display, hhd, steam=None):
         hhd.change_property(
             display.get_atom("_NET_WM_WINDOW_OPACITY"), Xatom.CARDINAL, 32, [0]
         )
+        hhd.change_property(display.get_atom("STEAM_BIGPICTURE"), Xatom.CARDINAL, 32, [1])
 
     hhd.change_property(display.get_atom("STEAM_NOTIFICATION"), Xatom.CARDINAL, 32, [0])
-    hhd.change_property(display.get_atom("STEAM_BIGPICTURE"), Xatom.CARDINAL, 32, [1])
     hhd.change_property(display.get_atom("GAMESCOPE_NO_FOCUS"), Xatom.CARDINAL, 32, [1])
     display.flush()
     display.sync()

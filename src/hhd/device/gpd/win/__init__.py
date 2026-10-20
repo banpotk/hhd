@@ -14,11 +14,14 @@ from hhd.plugins import (
 )
 from hhd.plugins.settings import HHDSettings
 from hhd.utils import get_distro_color, hsb_to_rgb
+from hhd.i18n import _
 
 from .const import (
     GPD_WIN_4_8840U_MAPPINGS,
+    GPD_WIN_5_MAPPINGS,
     GPD_WIN_DEFAULT_MAPPINGS,
     GPD_WIN_MAX_2_2023_MAPPINGS,
+    GPD_WIN_5_BTN_MAPPINGS,
 )
 
 GPD_CONFS = {
@@ -31,34 +34,43 @@ GPD_CONFS = {
     "G1618-04": {
         "name": "GPD Win 4",
         "hrtimer": True,
-        "wincontrols": True,
+        "wincontrols": "v1",
         "rgb": True,
         "combo": "menu",
         "chord": "select",
     },
+    "G1618-05": {
+        "name": "GPD Win 5",
+        "hrtimer": True,
+        "wincontrols": "v2",
+        "mapping": GPD_WIN_5_MAPPINGS,
+        "btn_mapping": GPD_WIN_5_BTN_MAPPINGS,
+        "dedicated_hhd_button": True,
+        "manage_l4r4": False,
+    },
     "G1617-01": {
         "name": "GPD Win Mini",
         "touchpad": True,
-        "wincontrols": True,
+        "wincontrols": "v1",
     },
     "G1617-02": {
         "name": "GPD Win Mini (2025)",
         "touchpad": True,
-        "wincontrols": False,
+        "wincontrols": "v2",
     },
     "G1619-04": {
         "name": "GPD Win Max 2 (04)",
         "hrtimer": True,
         "touchpad": True,
         "mapping": GPD_WIN_MAX_2_2023_MAPPINGS,
-        "wincontrols": True,
+        "wincontrols": "v1",
     },
     "G1619-05": {
         "name": "GPD Win Max 2 (05)",
         "hrtimer": True,
         "touchpad": True,
         "mapping": GPD_WIN_MAX_2_2023_MAPPINGS,
-        "wincontrols": True,
+        "wincontrols": "v1",
     },
 }
 
@@ -108,9 +120,12 @@ class GpdWinControllersPlugin(HHDPlugin):
         )
 
         # Tweak defaults for l4r4menu and main_chords
-        base["controllers"]["gpd_win"]["children"]["l4r4"]["default"] = self.dconf.get(
-            "combo", "r4"
-        )
+        if self.dconf.get("manage_l4r4", True):
+            base["controllers"]["gpd_win"]["children"]["l4r4"]["default"] = (
+                self.dconf.get("combo", "r4")
+            )
+        else:
+            del base["controllers"]["gpd_win"]["children"]["l4r4"]
         base["controllers"]["gpd_win"]["children"]["main_chords"]["default"] = (
             self.dconf.get("chord", "disabled")
         )
@@ -202,21 +217,48 @@ class GpdWinControlsPlugin(HHDPlugin):
         else:
             del base["wincontrols"]["wincontrols"]["children"]["leds"]
 
+        ver = self.dconf.get("wincontrols", None)
+        if ver == "v2":
+            base["wincontrols"]["wincontrols"]["children"]["mouse_mode_triggers"]["options"]["gpd"] = (
+                _("GPD (LB/RB are L/R Clicks)")
+            )
+            base["wincontrols"]["wincontrols"]["children"]["mouse_mode_triggers"]["options"][
+                "steamos"
+            ] = _("SteamOS (LB/RB are R/L Clicks)")
+            base["wincontrols"]["wincontrols"]["children"]["l4r4"]["options"]["hhd"] = (
+                _("For HHD (F15/F14)")
+            )
+            base["wincontrols"]["wincontrols"]["children"]["l4r4"]["options"][
+                "default"
+            ] = _("Default (CTRL,SHIFT/F3)")
+
         return base
 
     def update(self, conf: Config):
         if not conf.get_action(f"wincontrols.wincontrols.apply"):
             return
 
-        from .wincontrols import (
-            BACKBUTTONS_DEFAULT,
-            BACKBUTTONS_HHD,
-            BUTTONS_DEFAULT,
-            BUTTONS_PHAWX,
-            BUTTONS_TRIGGERS_DEFAULT,
-            BUTTONS_TRIGGERS_STEAMOS,
-            update_config,
-        )
+        ver = self.dconf.get("wincontrols", None)
+        if ver == "v2":
+            from .wincontrols2 import (
+                BACKBUTTONS_DEFAULT,
+                BACKBUTTONS_HHD,
+                BUTTONS_DEFAULT,
+                BUTTONS_PHAWX,
+                BUTTONS_TRIGGERS_DEFAULT,
+                BUTTONS_TRIGGERS_STEAMOS,
+                update_config,
+            )
+        else:
+            from .wincontrols import (
+                BACKBUTTONS_DEFAULT,
+                BACKBUTTONS_HHD,
+                BUTTONS_DEFAULT,
+                BUTTONS_PHAWX,
+                BUTTONS_TRIGGERS_DEFAULT,
+                BUTTONS_TRIGGERS_STEAMOS,
+                update_config,
+            )
 
         c = conf["wincontrols.wincontrols"]
         vibration = c.get("vibration", "off")
@@ -248,21 +290,24 @@ class GpdWinControlsPlugin(HHDPlugin):
         if c.get("deadzones.mode", "unchanged") == "custom":
             deadzones.update(c.get("deadzones.custom", {}))
 
-        rgb_mode = "off"
-        rgb_color = (0, 0, 0)
-        match c.get("leds.mode", "disabled"):
-            case "disabled":
-                rgb_mode = "off"
-            case "solid":
-                rgb_mode = "constant"
-                hue = c.get("leds.solid.hue", 0)
-                rgb_color = tuple(hsb_to_rgb(hue, 100, 100))
-            case "pulse":
-                rgb_mode = "breathed"
-                hue = c.get("leds.pulse.hue", 0)
-                rgb_color = tuple(hsb_to_rgb(hue, 100, 100))
-            case "rainbow":
-                rgb_mode = "rotated"
+        rgb_mode = None
+        rgb_color = None
+        if self.dconf.get("rgb", False):
+            rgb_mode = "off"
+            rgb_color = (0, 0, 0)
+            match c.get("leds.mode", "disabled"):
+                case "disabled":
+                    rgb_mode = "off"
+                case "solid":
+                    rgb_mode = "constant"
+                    hue = c.get("leds.solid.hue", 0)
+                    rgb_color = tuple(hsb_to_rgb(hue, 100, 100))
+                case "pulse":
+                    rgb_mode = "breathed"
+                    hue = c.get("leds.pulse.hue", 0)
+                    rgb_color = tuple(hsb_to_rgb(hue, 100, 100))
+                case "rainbow":
+                    rgb_mode = "rotated"
 
         try:
             conf["wincontrols.wincontrols.fwver"] = update_config(
@@ -273,6 +318,7 @@ class GpdWinControlsPlugin(HHDPlugin):
                 rgb_color=rgb_color,  # type: ignore
                 deadzones=deadzones,
             )
+            conf["wincontrols.wincontrols.status"] = f""
         except Exception as e:
             conf["wincontrols.wincontrols.status"] = f"{e}"
             conf["wincontrols.wincontrols.fwver"] = f""
@@ -299,7 +345,7 @@ def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:
 
             if dconf:
                 base: list[HHDPlugin] = [GpdWinControllersPlugin(dmi, dconf)]
-                if dconf.get("wincontrols", False):
+                if dconf.get("wincontrols", None):
                     base.append(GpdWinControlsPlugin(dmi, dconf))
                 return base
 

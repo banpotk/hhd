@@ -13,7 +13,14 @@ from hhd.controller.physical.imu import CombinedImu, HrtimerTrigger
 from hhd.controller.virtual.uinput import UInputDevice
 from hhd.plugins import Config, Context, Emitter, get_gyro_state, get_outputs
 
-from .const import BTN_MAPPINGS, BTN_MAPPINGS_NONTURBO, DEFAULT_MAPPINGS
+from .const import (
+    BTN_MAPPINGS,
+    BTN_MAPPINGS_NONTURBO,
+    BTN_MAPPINGS_NONTURBO_X2,
+    BTN_MAPPINGS_OXP3,
+    BTN_MAPPINGS_X2,
+    DEFAULT_MAPPINGS,
+)
 from .hid_v1 import OxpHidraw
 from .hid_v2 import OxpHidrawV2
 from .serial import SerialDevice, get_serial
@@ -51,6 +58,10 @@ RGB_MODES_FULL = {
     "oxp": ["oxp", "oxp-secondary"],
     "solid": ["color"],
     "duality": ["dual"],
+}
+RGB_MODES_FULL_BREATHING = {
+    **RGB_MODES_FULL,
+    "oxp": ["oxp", "oxp-secondary", "oxp-secondary-breathing"],
 }
 RGB_MODES_STICKS = {
     "disabled": [],
@@ -102,7 +113,7 @@ def plugin_run(
             # Serial device is always present
             # Hid devices might not be, wait a bit for them
             match protocol:
-                case "hid_v1":
+                case "hid_v1" | "hid_v2_x2":
                     found_vendor = bool(
                         enumerate_unique(
                             vid=X1_MINI_VID,
@@ -122,6 +133,22 @@ def plugin_run(
                     )
                 case "hid_v1_g1":
                     found_vendor = bool(
+                        enumerate_unique(
+                            vid=XFLY_VID,
+                            pid=XFLY_PID,
+                            usage_page=XFLY_PAGE,
+                            usage=XFLY_USAGE,
+                        )
+                    )
+                case "hid_dual":
+                    found_vendor = bool(
+                        enumerate_unique(
+                            vid=X1_MINI_VID,
+                            pid=X1_MINI_PID,
+                            usage_page=X1_MINI_PAGE,
+                            usage=X1_MINI_USAGE,
+                        )
+                    ) and bool(
                         enumerate_unique(
                             vid=XFLY_VID,
                             pid=XFLY_PID,
@@ -235,7 +262,22 @@ class OxpAtKbd(GenericGamepadEvdev):
         return evs
 
 
-def find_vendor(prepare, turbo, protocol: str | None):
+def find_vendor(
+    prepare,
+    turbo,
+    protocol: str | None,
+    secondary: bool,
+    secondary_breathing: bool,
+    vibration: str | None,
+    quirk: str | None = None,
+):
+    vibration_val = None
+    if vibration is not None:
+        if not isinstance(vibration, str) or not vibration.startswith("v"):
+            logger.error(f"Invalid vibration strength value: {vibration}")
+        else:
+            vibration_val = int(vibration[1:])
+
     d_ser = SerialDevice(turbo=turbo, required=True)
     d_hidraw = OxpHidraw(
         vid=[X1_MINI_VID],
@@ -244,6 +286,12 @@ def find_vendor(prepare, turbo, protocol: str | None):
         usage=[X1_MINI_USAGE],
         turbo=turbo,
         required=True,
+        led_control=(protocol != "hid_dual"),
+        secondary=secondary,
+        secondary_breathing=secondary_breathing,
+        x2=(protocol == "hid_v2_x2"),
+        quirk=quirk,
+        vibration=vibration_val,
     )
     d_hidraw_v2 = OxpHidrawV2(
         vid=[XFLY_VID],
@@ -261,6 +309,8 @@ def find_vendor(prepare, turbo, protocol: str | None):
         turbo=turbo,
         required=True,
         g1=True,
+        secondary=False,
+        vibration=vibration_val,
     )
 
     if protocol in ["serial", "mixed"]:
@@ -284,10 +334,14 @@ def find_vendor(prepare, turbo, protocol: str | None):
         except Exception as e:
             pass
 
-    if protocol == "hid_v1":
+    if protocol in ("hid_v1", "hid_v2_x2"):
         try:
             prepare(d_hidraw)
-            logger.info("Found OXP V1 hidraw vendor device.")
+            logger.info(
+                "Found OXP X2 hidraw vendor device."
+                if protocol == "hid_v2_x2"
+                else "Found OXP V1 hidraw vendor device."
+            )
             return [d_hidraw]
         except Exception as e:
             pass
@@ -308,6 +362,27 @@ def find_vendor(prepare, turbo, protocol: str | None):
         except Exception as e:
             pass
 
+    if protocol == "hid_dual":
+        devices = []
+        try:
+            prepare(d_hidraw)
+            logger.info("Found OXP V1 hidraw vendor device.")
+            devices.append(d_hidraw)
+        except Exception as e:
+            logger.warning(f"Could not find V1 hidraw device: {e}")
+
+        try:
+            prepare(d_hidraw_v2)
+            logger.info("Found OXP V2 hidraw vendor device.")
+            devices.append(d_hidraw_v2)
+        except Exception as e:
+            logger.warning(f"Could not find V2 hidraw device: {e}")
+
+        if devices:
+            return devices
+        else:
+            logger.error("No vendor devices found for hid_dual protocol.")
+
     logger.error("No vendor device found, RGB and back buttons will not work.")
     return []
 
@@ -323,7 +398,11 @@ def turbo_loop(
 
     # Output
     if dconf.get("rgb_secondary", False):
-        rgb_modes = RGB_MODES_FULL
+        rgb_modes = (
+            RGB_MODES_FULL_BREATHING
+            if dconf.get("rgb_secondary_breathing", False)
+            else RGB_MODES_FULL
+        )
     elif dconf.get("rgb", True):
         if dconf.get("aok", False):
             rgb_modes = RGB_MODES_STICKS_AOK
@@ -341,13 +420,35 @@ def turbo_loop(
         controller_disabled=True,
     )
 
-    d_kbd_1 = OxpAtKbd(
-        vid=[KBD_VID],
-        pid=[KBD_PID],
-        required=False,
-        grab=True,
-        btn_map=BTN_MAPPINGS,
-    )
+    # X2 keeps volume keys on the AT keyboard and exposes its controller
+    # shortcuts on a second keyboard interface, so both must be grabbed.
+    d_kbds = [
+        OxpAtKbd(
+            vid=[KBD_VID],
+            pid=[KBD_PID],
+            required=False,
+            grab=True,
+            btn_map=(
+                BTN_MAPPINGS_OXP3 if dconf.get("quirk") == "oxp3" else BTN_MAPPINGS
+            ),
+        )
+    ]
+    if dconf.get("protocol", None) == "hid_v2_x2" or dconf.get("quirk") == "apex":
+        match dconf.get("quirk"):
+            case "oxp3":
+                mappings_x2 = BTN_MAPPINGS_OXP3
+            case _:
+                mappings_x2 = BTN_MAPPINGS_X2
+        d_kbds.append(
+            OxpAtKbd(
+                vid=[X1_MINI_VID],
+                pid=[X1_MINI_PID],
+                capabilities={EC("EV_KEY"): [EC("KEY_O")]},
+                required=True,
+                grab=True,
+                btn_map=mappings_x2,
+            )
+        )
 
     share_reboots = False
     last_controller_check = 0
@@ -426,12 +527,21 @@ def turbo_loop(
 
     try:
         prepare(d_volume_btn)
-        d_vend = find_vendor(prepare, True, dconf.get("protocol", None))
+        d_vend = find_vendor(
+            prepare,
+            True,
+            protocol=dconf.get("protocol", None),
+            quirk=dconf.get("quirk"),
+            secondary=dconf.get("rgb_secondary", False),
+            secondary_breathing=dconf.get("rgb_secondary_breathing", False),
+            vibration=conf.get("vibration_strength", None),
+        )
         d_vend_id = [id(d) for d in d_vend]
 
         for d in d_producers:
             prepare(d)
-        prepare(d_kbd_1)
+        for d in d_kbds:
+            prepare(d)
 
         logger.info(
             "Turbo only mode started, the turbo button of the device will still work."
@@ -462,7 +572,8 @@ def turbo_loop(
                     evs.extend(d.produce(r))
 
             # Read delayed events
-            evs.extend(d_kbd_1.produce([]))
+            for d in d_kbds:
+                evs.extend(d.produce([]))
 
             evs = multiplexer.process(evs)
             if evs:
@@ -504,7 +615,11 @@ def controller_loop(
     debug = DEBUG_MODE
 
     if dconf.get("rgb_secondary", False):
-        rgb_modes = RGB_MODES_FULL
+        rgb_modes = (
+            RGB_MODES_FULL_BREATHING
+            if dconf.get("rgb_secondary_breathing", False)
+            else RGB_MODES_FULL
+        )
     elif dconf.get("rgb", True):
         if dconf.get("aok", False):
             rgb_modes = RGB_MODES_STICKS_AOK
@@ -541,21 +656,52 @@ def controller_loop(
         hide=True,
     )
 
-    if turbo:
-        # Switch buttons if turbo is enabled.
-        # This only affects AOKZOE and OneXPlayer devices with
-        # that button that have the nonturbo mapping as default
-        mappings = BTN_MAPPINGS
-    else:
-        mappings = BTN_MAPPINGS_NONTURBO
+    # Switch buttons if turbo is enabled. This only affects AOKZOE and
+    # OneXPlayer devices whose default mapping leaves the turbo button alone.
+    mappings = BTN_MAPPINGS if turbo else BTN_MAPPINGS_NONTURBO
+    if dconf.get("quirk") == "oxp3":
+        mappings = BTN_MAPPINGS_OXP3
+    # X2 keeps volume keys on the AT keyboard and exposes its controller
+    # shortcuts on a second keyboard interface, so both must be grabbed.
+    d_kbds = [
+        OxpAtKbd(
+            vid=[KBD_VID],
+            pid=[KBD_PID],
+            required=False,
+            grab=True,
+            btn_map=mappings,
+        )
+    ]
+    if dconf.get("protocol", None) == "hid_v2_x2" or dconf.get("quirk") == "apex":
+        match dconf.get("quirk"):
+            case "oxp3":
+                mappings_x2 = BTN_MAPPINGS_OXP3
+            case _:
+                mappings_x2 = BTN_MAPPINGS_X2 if turbo else BTN_MAPPINGS_NONTURBO_X2
+        d_kbds.append(
+            OxpAtKbd(
+                vid=[X1_MINI_VID],
+                pid=[X1_MINI_PID],
+                capabilities={EC("EV_KEY"): [EC("KEY_O")]},
+                required=True,
+                grab=True,
+                btn_map=mappings_x2,
+            )
+        )
+    if dconf.get("quirk") in ("x2mini_pro", "oxp3"):
+        # Detached controller shortcuts arrive on the dongle's keyboard.
+        d_kbds.append(
+            OxpAtKbd(
+                vid=[X1_MINI_VID],
+                pid=[0xFE02],
+                capabilities={EC("EV_KEY"): [EC("KEY_O")]},
+                required=False,
+                log_not_found=False,
+                grab=True,
+                btn_map=mappings_x2,
+            )
+        )
 
-    d_kbd_1 = OxpAtKbd(
-        vid=[KBD_VID],
-        pid=[KBD_PID],
-        required=False,
-        grab=True,
-        btn_map=mappings,
-    )
     # Touchpad keyboard
     d_kbd_2 = GenericGamepadEvdev(
         vid=[0x6080],
@@ -571,7 +717,7 @@ def controller_loop(
     keyboard_is = "keyboard"
     qam_hhd = False
     qam_no_release = False
-    if turbo:
+    if turbo and not dconf.get("g1", False):
         if conf.get("turbo_reboots", False):
             share_reboots = True
         match conf.get("extra_buttons", "separate"):
@@ -646,7 +792,15 @@ def controller_loop(
             fd_to_dev[f] = m
 
     try:
-        d_vend = find_vendor(prepare, turbo, dconf.get("protocol", None))
+        d_vend = find_vendor(
+            prepare,
+            turbo,
+            protocol=dconf.get("protocol", None),
+            quirk=dconf.get("quirk"),
+            secondary=dconf.get("rgb_secondary", False),
+            secondary_breathing=dconf.get("rgb_secondary_breathing", False),
+            vibration=conf.get("vibration_strength", None),
+        )
         d_vend_id = [id(d) for d in d_vend]
         if dconf.get("g1", False):
             prepare(d_kbd_2)
@@ -658,7 +812,8 @@ def controller_loop(
             if start_imu:
                 prepare(d_imu)
         prepare(d_volume_btn)
-        prepare(d_kbd_1)
+        for d in d_kbds:
+            prepare(d)
 
         for d in d_producers:
             prepare(d)
@@ -679,7 +834,8 @@ def controller_loop(
                     evs.extend(d.produce(r))
 
             # Read delayed events
-            evs.extend(d_kbd_1.produce([]))
+            for d in d_kbds:
+                evs.extend(d.produce([]))
 
             evs = multiplexer.process(evs)
             if evs:

@@ -1,5 +1,7 @@
 import logging
 import os
+import platform
+import re
 
 from hhd.plugins.plugin import (
     Context,
@@ -16,25 +18,29 @@ from hhd.plugins.plugin import (
 
 logger = logging.getLogger(__name__)
 
-DISTRO_NAMES = ("manjaro", "bazzite", "ubuntu", "arch")
 GIT_HHD = "git+https://github.com/hhd-dev/hhd"
-GIT_ADJ = "git+https://github.com/hhd-dev/adjustor"
 HHD_DEV_DIR = "/run/hhd/dev"
+
+GIT_VERSION_RE = re.compile(r"^(.+\+git\.\d+)\.g?[0-9a-fA-F]+$")
+
+
+def get_display_version(version: str) -> str:
+    """Remove the commit hash from a version produced from a Git checkout."""
+    match = GIT_VERSION_RE.fullmatch(version)
+    return match.group(1) if match else version
 
 
 def get_distro_color():
     match get_os():
-        case "manjaro":
-            return 115
-        case "bazzite":
-            return 265
+        case "anatase":
+            return 53
         case "arch":
             return 195
         case "ubuntu":
             return 340
-        case "red_gold" | "red_gold_ba":
+        case "red_gold" | "red_gold_an":
             return 28
-        case "blood_orange" | "blood_orange_ba":
+        case "blood_orange" | "blood_orange_an":
             return 18
         case _:
             return 30
@@ -92,20 +98,16 @@ def rgb_to_hsb(r, g, b):
 def get_os() -> str:
     if name := os.environ.get("HHD_DISTRO", None):
         logger.warning(f"Distro override using an environment variable to '{name}'.")
-        return name
+        return name.lower()
 
     try:
-        with open("/etc/os-release") as f:
-            os_release = f.read().strip().lower()
+        name = platform.freedesktop_os_release()["NAME"]
     except Exception as e:
         logger.error(f"Could not read os information, error:\n{e}")
         return "ukn"
 
-    distro = None
-    for name in DISTRO_NAMES:
-        if name in os_release:
-            logger.info(f"Running under Linux distro '{name}'.")
-            distro = name
+    distro = name.lower()
+    logger.info(f"Running under Linux distro '{distro}'.")
 
     try:
         # Match just product name
@@ -113,25 +115,15 @@ def get_os() -> str:
         with open("/sys/devices/virtual/dmi/id/product_name") as f:
             dmi = f.read().strip()
 
-        # if "jupiter" in dmi.lower() or "onexplayer" in dmi.lower():
-        #     if distro == "bazzite":
-        #         distro = "blood_orange_ba"
-        #     else:
-        #         distro = "blood_orange"
-
         if "ONEXPLAYER F1 EVA-02" in dmi:
-            if distro == "bazzite":
-                distro = "red_gold_ba"
+            if distro == "anatase":
+                distro = "red_gold_an"
             else:
                 distro = "red_gold"
     except Exception as e:
         logger.error(f"Could not read product name, error:\n{e}")
 
-    if distro is not None:
-        return distro
-
-    logger.info(f"Running under an unknown Linux distro.")
-    return "ukn"
+    return distro
 
 
 def get_ac_status_fn() -> str | None:
@@ -161,12 +153,20 @@ def get_ac_status(fn: str | None) -> bool | None:
         return None
     try:
         with open(fn) as f:
-            return f.read().strip() != "Discharging"
+            status = f.read().strip()
+        if status == "1":
+            return True
+        if status == "0":
+            return False
+        logger.error(f"Invalid AC status '{status}' read from '{fn}'.")
+        return None
     except Exception as e:
+        logger.error(f"Could not read AC status file '{fn}', error:\n{e}")
         return None
 
 
 __all__ = [
+    "get_display_version",
     "get_os",
     "refresh_is_steam_running",
     "is_steam_gamepad_running",

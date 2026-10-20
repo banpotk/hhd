@@ -37,8 +37,8 @@ class SpecialEvent(TypedDict):
         "xbox_y_internal",
         "xbox_a",
         "xbox_x",
-        "kbd_meta_press",
-        "kbd_meta_hold",
+        "kbd_ctrl_3",
+        "kbd_ctrl_4",
         "swipe_left_top",
         "swipe_left_bottom",
         "swipe_right_top",
@@ -56,6 +56,9 @@ class SpecialEvent(TypedDict):
         "brightness_changed",
         "custom_armoury",
         "custom_fan",
+        "cec_back_double",
+        "cec_back_hold",
+        "cec_back_triple",
         # Powerbutton presses
         "pbtn_short",
         "pbtn_long",
@@ -79,7 +82,16 @@ class RumbleEvent(TypedDict):
 
 RgbMode = Literal["disabled", "solid", "pulse", "rainbow", "spiral", "duality", "oxp"]
 RgbSettings = Literal[
-    "color", "brightness", "speed", "brightnessd", "speedd", "direction", "dual", "oxp"
+    "color",
+    "brightness",
+    "speed",
+    "brightnessd",
+    "speedd",
+    "direction",
+    "dual",
+    "oxp",
+    "oxp-secondary",
+    "oxp-secondary-breathing",
 ]
 
 # Mono is a single zone (main only)
@@ -152,6 +164,7 @@ class RgbLedEvent(TypedDict):
     blue2: int
 
     oxp: None | OxpModes
+    secondary_breathing: NotRequired[bool]
 
 
 class ButtonEvent(TypedDict):
@@ -559,6 +572,8 @@ class Multiplexer:
                 "start_is_keyboard",
                 "aya_traditional",
                 "aya_traditional_rev",
+                "xa_xbox_is_xbox",
+                "xa_xbox_is_xbox_rev",
             ]
         ) = None,
         trigger: None | Literal["analog_to_discrete", "discrete_to_analogue"] = None,
@@ -588,7 +603,7 @@ class Multiplexer:
         params: Mapping[str, Any] = {},
         qam_multi_tap: bool = True,
         qam_no_release: bool = False,
-        qam_hhd: bool = False,
+        qam_hhd: bool | Literal["side", "full"] = False,
         qam_hold: Literal["hhd", "mode"] = "hhd",
         keyboard_is: Literal["steam_qam", "qam", "keyboard"] = "keyboard",
         keyboard_no_release: bool = False,
@@ -662,22 +677,28 @@ class Multiplexer:
             "rgb_modes", None
         )
         rgb_zones: RgbZones = params.get("rgb_zones", "mono")
+        rgb = None
+        if rgb_modes:
+            rgb: RgbCapabilities | None = {
+                "modes": rgb_modes,
+                "controller": uses_rgb,
+                "zones": rgb_zones,
+                "resets_on_ac": params.get("rgb_resets_on_ac", False),
+                "init_times": params.get("rgb_init_times", None),
+            }
+        self.rgb = rgb
+        self.supports_qam = params.get("supports_qam", True)
+        self.refresh()
+
+    def refresh(self):
+        self.unique = str(time.perf_counter_ns())
         if self.emit:
-            rgb = None
-            if rgb_modes:
-                rgb: RgbCapabilities | None = {
-                    "modes": rgb_modes,
-                    "controller": uses_rgb,
-                    "zones": rgb_zones,
-                    "resets_on_ac": params.get("rgb_resets_on_ac", False),
-                    "init_times": params.get("rgb_init_times", None),
-                }
             self.emit.set_capabilities(
                 self.unique,
                 {
                     "buttons": {},
-                    "rgb": rgb,
-                    "supports_qam": params.get("supports_qam", True),
+                    "rgb": self.rgb,
+                    "supports_qam": self.supports_qam,
                 },
             )
 
@@ -966,6 +987,10 @@ class Multiplexer:
                                         ev["code"] = "select"
                                     case "aya_traditional_rev":
                                         ev["code"] = "mode"
+                                    case "xa_xbox_is_xbox":
+                                        pass
+                                    case "xa_xbox_is_xbox_rev":
+                                        ev["code"] = "keyboard"
                                     case "start_is_keyboard":
                                         ev["code"] = "keyboard"
                                     case "select_is_guide":
@@ -978,6 +1003,10 @@ class Multiplexer:
                                         ev["code"] = "mode"
                                     case "aya_traditional_rev":
                                         pass
+                                    case "xa_xbox_is_xbox":
+                                        pass
+                                    case "xa_xbox_is_xbox_rev":
+                                        ev["code"] = "share"
                                     case "start_is_keyboard":
                                         ev["code"] = "mode"
                                     case "select_is_guide":
@@ -990,6 +1019,10 @@ class Multiplexer:
                                         ev["code"] = "start"
                                     case "aya_traditional_rev":
                                         ev["code"] = "keyboard"
+                                    case "xa_xbox_is_xbox":
+                                        ev["code"] = "share"
+                                    case "xa_xbox_is_xbox_rev":
+                                        ev["code"] = "select"
                                     case "guide_is_start":
                                         ev["code"] = "start"
                                     case _:
@@ -1000,6 +1033,10 @@ class Multiplexer:
                                         pass
                                     case "aya_traditional_rev":
                                         pass
+                                    case "xa_xbox_is_xbox":
+                                        ev["code"] = "mode"
+                                    case "xa_xbox_is_xbox_rev":
+                                        ev["code"] = "mode"
                                     case "start_is_keyboard":
                                         pass
                                     case "guide_is_start":
@@ -1011,6 +1048,8 @@ class Multiplexer:
                                     case "start_is_keyboard":
                                         ev["code"] = "start"
                                     case "aya_traditional_rev":
+                                        ev["code"] = "start"
+                                    case "xa_xbox_is_xbox_rev":
                                         ev["code"] = "start"
 
                     if (
@@ -1432,14 +1471,24 @@ class Multiplexer:
 
         qam_hhd = self.qam_hhd and not self.qam_kbd
         if (
-            self.qam_pressed
+            (self.qam_pressed or self.qam_released)
             and self.qam_times == (1 if qam_hhd else 2)
             and not self.qam_pre_sent
             and self.emit
         ):
-            # Send event instantly after double press to eat delay
-            self.emit({"type": "special", "event": "qam_predouble"})
-            self.qam_pre_sent = True
+            if self.qam_hhd == "full" and qam_hhd:
+                # Send full open and cancel event
+                logger.info(f"QAM Pressed, opening fully.")
+                self.emit({"type": "special", "event": "qam_triple"})
+                self.qam_pressed = None
+                self.qam_released = None
+                self.qam_pre_sent = False
+                self.qam_times = 0
+            else:
+                logger.info(f"QAM Pressed, sending pre-double event.")
+                # Send event instantly after double press to eat delay
+                self.emit({"type": "special", "event": "qam_predouble"})
+                self.qam_pre_sent = True
 
         send_steam_qam = send_steam_qam or (
             qam_apply and not qam_hhd and self.qam_released and self.qam_times == 1

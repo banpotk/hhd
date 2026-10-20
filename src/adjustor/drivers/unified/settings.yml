@@ -1,0 +1,21 @@
+title: Power Controls
+type: container
+tags: [hide-title]
+hint: >-
+  Power settings for your device.
+children:
+  tdp:
+    type: mode
+    title: Power Mode
+    default: balanced
+    modes: {}
+  sys_tdp:
+    type: display
+    title: " "
+    tags: []
+
+  fan_full_speed:
+    type: bool
+    title: Set Fan to Full Speed
+
+  fan: {}

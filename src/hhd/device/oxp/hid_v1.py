@@ -19,7 +19,7 @@ def gen_cmd(cid: int, cmd: bytes | list[int] | str, idx: int = 0x01, size: int =
     return base + bytes([0] * (size - len(base) - 2)) + bytes([0x3F, cid])
 
 
-def gen_rgb_mode(mode: str):
+def gen_rgb_mode(mode: str, side: int = 0x00):
     mc = 0
     match mode:
         case "monster_woke":
@@ -40,14 +40,14 @@ def gen_rgb_mode(mode: str):
             mc = 0x01
         case "sun":
             mc = 0x08
-    return gen_cmd(0xB8, [mc, 0x00, 0x02])
+    return gen_cmd(0xB8, [mc, side, 0x02])
 
 
 gen_intercept = lambda enable: gen_cmd(0xB2, [0x03 if enable else 0x00, 0x01, 0x02])
 
 
 def gen_brightness(
-    side: Literal[0, 3, 4],
+    side: Literal[0, 1, 2, 3, 4],
     enabled: bool,
     brightness: Literal["low", "medium", "high"],
 ):
@@ -59,7 +59,7 @@ def gen_brightness(
         case _:  # "high":
             bc = 0x04
 
-    return gen_cmd(0xB8, [0xFD, 0x00, 0x02, enabled, 0x05, bc])
+    return gen_cmd(0xB8, [0xFD, side, 0x02, enabled, 0x05, bc])
 
 # Sides on the g1
 # 1 = left controller
@@ -67,8 +67,19 @@ def gen_brightness(
 # 3 = center V
 # 4 = touch keyboard
 # 5 = device color on the front (triangle)
-def gen_rgb_solid(r, g, b, side: int = 0x00):
-    return gen_cmd(0xB8, [0xFE, side, 0x02] + 18 * [r, g, b] + [r, g])
+def gen_rgb_solid(r, g, b, side: int = 0x00, breathing: bool = False):
+    mode = 0xF0 if breathing else 0xFE
+    return gen_cmd(0xB8, [mode, side, 0x02] + 18 * [r, g, b] + [r, g])
+
+
+def gen_vibration(strength: int):
+    mode = 0x02 if strength == 0 else 0x01
+    set_cmd = (
+        [0x02, 0x38, 0x02, 0xE3, 0x39, 0xE3, 0x39, 0xE3, 0x39, mode, strength, strength, 0xE3, 0x39, 0xE3]
+        + [0x00] * 35
+        + [0x39, 0xE3, 0x39, 0xE3, 0xE3, 0x02, 0x04, 0x39, 0x39]
+    )
+    return gen_cmd(0xB3, set_cmd)
 
 
 KBD_NAME = "keyboard"
@@ -80,6 +91,18 @@ OXP_BUTTONS = {
     0x21: HOME_NAME,
     0x22: "extra_l1",
     0x23: "extra_r1",
+}
+
+OXP_BUTTONS_APEX = {
+    **OXP_BUTTONS,
+    0x22: "extra_r1",
+    0x23: "extra_l1",
+}
+
+OXP_BUTTONS_OXP3 = {
+    **OXP_BUTTONS,
+    # Home button, with real press/release events.
+    0x24: "mode",
 }
 
 
@@ -94,6 +117,23 @@ INITIALIZE = [
     ),
     gen_intercept(False),
 ]
+INITIALIZE_X2 = [
+    # The Windows utility enters intercept before applying mappings.
+    # gen_intercept(True), # this appears to be problematic
+    gen_cmd(
+        0xB4,
+        "0238020101010101000000020102000000030103000000040104000000050105000000060106000000070107000000080108000000090109000000",
+    ),
+    gen_cmd(
+        0xB4,
+        "02380202010a010a0000000b010b0000000c010c0000000d010d0000000e010e0000000f010f000000100110000000220201680000230201690000",
+    ),
+    gen_cmd(
+        0xB4,
+        "0238020301240202050000250121000000"
+    ),
+    gen_intercept(False),
+]
 
 INIT_DELAY = 4
 CONNECT_DELAY = 0.3
@@ -101,26 +141,63 @@ WRITE_DELAY = 0.05
 SCAN_DELAY = 1
 
 _init_done = False
-
+_init_vibration = None
 
 class OxpHidraw(GenericGamepadHidraw):
-    def __init__(self, *args, turbo: bool = True, g1: bool = False, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        turbo: bool = True,
+        g1: bool = False,
+        x2: bool = False,
+        quirk: str | None = None,
+        led_control: bool = True,
+        secondary: bool = False,
+        secondary_breathing: bool = False,
+        vibration: int | None,
+        **kwargs,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.prev = {}
         self.queue_kbd = None
         self.queue_home = None
         self.queue_cmd = deque(maxlen=10)
+        self.init_pending = 0
         self.next_send = 0
         self.queue_led = None
         self.turbo = turbo
+        self.vibration = vibration
 
         self.g1 = g1
+        self.x2 = x2
+        if quirk == "oxp3":
+            self.btn_map = OXP_BUTTONS_OXP3
+            self.rgb_sides = (0x01, 0x02, 0x07)
+            self.secondary_sides = (0x05, 0x06)
+        elif quirk == "apex":
+            self.btn_map = OXP_BUTTONS_APEX
+            self.rgb_sides = (0x00,)
+            self.secondary_sides = (0x03, 0x04)
+        elif x2:
+            self.btn_map = OXP_BUTTONS
+            self.rgb_sides = (0x01, 0x02, 0x07)
+            self.secondary_sides = (0x05, 0x06)
+        else:
+            self.btn_map = OXP_BUTTONS
+            self.rgb_sides = (0x00,)
+            self.secondary_sides = (0x03, 0x04)
+        self.secondary = secondary and not g1
+        self.secondary_breathing = secondary_breathing and x2
         self.send_init = not g1  # g1 has no extra buttons
+        self.led_control = led_control
         self.prev_brightness = None
         self.prev_stick = None
         self.prev_stick_enabled = None
-        # self.prev_center = None
-        # self.prev_center_enabled = None
+        self.prev_vibration = None
+        self.prev_center = None
+        self.prev_center_enabled = None
+        self.prev_center_brightness = None
+        self.prev_center_breathing = None
 
     def open(self):
         a = super().open()
@@ -128,28 +205,38 @@ class OxpHidraw(GenericGamepadHidraw):
         self.queue_home = None
         self.prev = {}
 
-        global _init_done
+        global _init_done, _init_vibration
         self.next_send = time.perf_counter() + CONNECT_DELAY
         if self.send_init:
             if not _init_done:
                 self.next_send = time.perf_counter() + INIT_DELAY
-                self.queue_cmd.extend(INITIALIZE)
+                initialize = INITIALIZE_X2 if self.x2 else INITIALIZE
+                self.queue_cmd.extend(initialize)
+                self.init_pending = len(initialize)
                 # Setting the mappings is a bit aggressive and causes the device
                 # to flash its leds. Only do it during boot.
-                _init_done = True
             else:
                 self.queue_cmd.append(gen_intercept(False))
+        
+        if _init_vibration is None:
+            # Do not process vibration if the same as previous value
+            # Prevents vibrating the controller on boot
+            _init_vibration = self.vibration
+        if self.vibration is not None and self.vibration != _init_vibration:
+            logger.error(f"Setting initial vibration to {self.vibration}")
+            self.queue_cmd.append(gen_vibration(self.vibration))
+            _init_vibration = self.vibration
+
         return a
 
     def consume(self, events):
+        global _init_done
+
         if not self.dev:
             return
 
-        # Capture led events
         for ev in events:
-            if ev["type"] == "led":
-                # if self.queue_led:
-                #     logger.warning("OXP HID LED event queue overflow.")
+            if ev["type"] == "led" and self.led_control:
                 self.queue_led = ev
 
         # Send queued event if applicable
@@ -158,6 +245,11 @@ class OxpHidraw(GenericGamepadHidraw):
             cmd = self.queue_cmd.popleft()
             logger.info(f"OXP C: {cmd.hex()}")
             self.dev.write(cmd)
+            if self.init_pending:
+                self.init_pending -= 1
+                if not self.init_pending:
+                    # A failed startup must retry the mappings on the next open.
+                    _init_done = True
             self.next_send = curr + WRITE_DELAY
 
         # Queue needs to flush before switching to next event
@@ -170,32 +262,37 @@ class OxpHidraw(GenericGamepadHidraw):
         brightness = "high"
         stick = None
         stick_enabled = True
-        # center = None
-        # center_enabled = True
-        # init = ev["initialize"]
+        center = None
+        center_enabled = True
+        center_brightness = brightness
+        center_breathing = self.secondary_breathing and ev.get(
+            "secondary_breathing", False
+        )
+        init = ev["initialize"]
 
         match ev["mode"]:
             case "solid":
                 stick = ev["red"], ev["green"], ev["blue"]
-                # r2, g2, b2 = ev["red2"], ev["green2"], ev["blue2"]
-                # center = r2, g2, b2
-                # center_enabled = r2 > 10 or g2 > 10 or b2 > 10
-            # case "duality":
-            #     stick = ev["red"], ev["green"], ev["blue"]
-            #     center = ev["red2"], ev["green2"], ev["blue2"]
+                r2, g2, b2 = ev["red2"], ev["green2"], ev["blue2"]
+                center = r2, g2, b2
+                center_enabled = r2 > 10 or g2 > 10 or b2 > 10
+            case "duality":
+                stick = ev["red"], ev["green"], ev["blue"]
+                center = ev["red2"], ev["green2"], ev["blue2"]
             case "oxp" | "aok":
                 brightness = ev["brightnessd"]
+                center_brightness = brightness if self.x2 else "high"
                 stick = ev["oxp"]
                 if stick == "classic":
                     # Classic mode is a cherry red
                     stick = 0xB7, 0x30, 0x00
-                # r2, g2, b2 = ev["red2"], ev["green2"], ev["blue2"]
-                # center = r2, g2, b2
-                # center_enabled = r2 > 10 or g2 > 10 or b2 > 10
-                # init = True
+                r2, g2, b2 = ev["red2"], ev["green2"], ev["blue2"]
+                center = r2, g2, b2
+                center_enabled = r2 > 10 or g2 > 10 or b2 > 10
+                init = True
             case _:  # "disabled":
                 stick_enabled = False
-                # center_enabled = False
+                center_enabled = False
 
         # Force RGB to not initialize to workaround RGB breaking
         # rumble when being set
@@ -210,29 +307,55 @@ class OxpHidraw(GenericGamepadHidraw):
             stick_enabled != self.prev_stick_enabled
             or brightness != self.prev_brightness
         ):
-            self.queue_cmd.append(gen_brightness(0, stick_enabled, brightness))
+            for side in self.rgb_sides:
+                self.queue_cmd.append(gen_brightness(side, stick_enabled, brightness))
             self.prev_brightness = brightness
             self.prev_stick_enabled = stick_enabled
 
         if stick_enabled and stick and stick != self.prev_stick:
-            if isinstance(stick, str):
-                self.queue_cmd.append(gen_rgb_mode(stick))
-            else:
-                self.queue_cmd.append(gen_rgb_solid(*stick, side=0x00))
+            for side in self.rgb_sides:
+                if isinstance(stick, str):
+                    self.queue_cmd.append(gen_rgb_mode(stick, side=side))
+                else:
+                    self.queue_cmd.append(gen_rgb_solid(*stick, side=side))
             self.prev_stick = stick
             self.prev_brightness = brightness
             self.prev_stick_enabled = stick_enabled
 
-        # if center_enabled != self.prev_center_enabled:
-        #     self.queue_cmd.append(gen_brightness(0x03, center_enabled, "high"))
-        #     self.queue_cmd.append(gen_brightness(0x04, center_enabled, "high"))
-        #     self.prev_center_enabled = center_enabled
+        if self.secondary:
+            if (
+                center_enabled != self.prev_center_enabled
+                or center_brightness != self.prev_center_brightness
+            ):
+                for side in self.secondary_sides:
+                    self.queue_cmd.append(
+                        gen_brightness(side, center_enabled, center_brightness)
+                    )
+                self.prev_center_enabled = center_enabled
+                self.prev_center_brightness = center_brightness
 
-        # # Only apply center colors on init on init
-        # if init and center_enabled and center and center != self.prev_center:
-        #     self.queue_cmd.append(gen_rgb_solid(*center, side=0x03))
-        #     self.queue_cmd.append(gen_rgb_solid(*center, side=0x04))
-        #     self.prev_center = center
+            # Apply secondary changes to x2 immediately because the lights
+            # are on an A surface and it looks wrong otherwise. We will eat
+            # the lag unfortunately.
+            if (
+                (init or self.x2)
+                and center_enabled
+                and center
+                and (
+                    center != self.prev_center
+                    or center_breathing != self.prev_center_breathing
+                )
+            ):
+                for side in self.secondary_sides:
+                    self.queue_cmd.append(
+                        gen_rgb_solid(
+                            *center,
+                            side=side,
+                            breathing=center_breathing,
+                        )
+                    )
+                self.prev_center = center
+                self.prev_center_breathing = center_breathing
 
     def produce(self, fds):
         if not self.dev:
@@ -277,8 +400,8 @@ class OxpHidraw(GenericGamepadHidraw):
                 logger.warning(f"OXP HID invalid command: {cmd.hex()}")
                 continue
 
-            if cid in (0xF5, 0xB8):
-                # Initialization (0xf5) and rgb (0xb8) command responses, skip
+            if cid in (0xF5, 0xB4, 0xB8, 0xB3):
+                # Skip command responses for initialization (0xf5, 0xb4), rgb (0xb8), vibration (0xb3)
                 continue
 
             if cid != 0xB2:
@@ -287,13 +410,14 @@ class OxpHidraw(GenericGamepadHidraw):
 
             btn = cmd[6]
 
-            if btn not in OXP_BUTTONS:
-                logger.warning(
-                    f"OXP HID unknown button: {btn:x} from cmd:\n{cmd.hex()}"
-                )
+            if btn not in self.btn_map:
+                if btn != 0x00:
+                    logger.warning(
+                        f"OXP HID unknown button: {btn:x} from cmd:\n{cmd.hex()}"
+                    )
                 continue
 
-            btn = OXP_BUTTONS[btn]
+            btn = self.btn_map[btn]
             pressed = cmd[12] == 1
 
             if btn == KBD_NAME:

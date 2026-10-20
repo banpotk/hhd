@@ -339,6 +339,31 @@ class RestHandler(BaseHTTPRequestHandler):
                         user_lang=user_lang,
                     )
                     self.wfile.write(json.dumps(out).encode())
+            case "event":
+                self.set_response_ok()
+                with self.cond:
+                    if not content or not isinstance(content, Mapping):
+                        return self.send_error(
+                            f"Event requires a POST with the event data."
+                        )
+                    self.emit(content) # type: ignore
+
+                    # Return the current state after the event
+                    if "result" in params:
+                        self.cond.wait()
+                        out = {**cast(dict, self.conf.conf), "info": self.info.conf}
+                        out["version"] = translate_ver(
+                            self.conf, lang=lang, user_lang=user_lang
+                        )
+                        out = translate(
+                            out,
+                            self.conf,
+                            self.locales,
+                            lang=lang,
+                            user_lang=user_lang,
+                        )
+                        self.wfile.write(json.dumps(out).encode())
+
             case "version":
                 self.send_json({"version": 5})
             case "sections":
@@ -487,29 +512,36 @@ class HHDHTTPServer:
 
         try:
             if not os.path.exists("/run/hhd"):
-                os.mkdir("/run/hhd", 0o700)
+                os.mkdir("/run/hhd", 0o755)
             else:
-                os.chmod("/run/hhd", 0o700)
+                os.chmod("/run/hhd", 0o755)
             if os.path.exists("/run/hhd/api"):
                 os.remove("/run/hhd/api")
             self.unix = UnixHTTPServer("/run/hhd/api", self.uhandler) # type: ignore
+            # Allow read access to /api to nonroot
+            # TODO: Reconsider this security-wise
+            os.chmod("/run/hhd/api", 0o666)
             self.tu = Thread(target=self.unix.serve_forever)
             self.tu.start()
         except Exception as e:
             logger.error(f"Error starting server at '/run/hhd/api':\n{e}")
 
     def close(self):
-        if self.https and self.t:
-            with self.cond:
-                self.cond.notify_all()
-            self.https.shutdown()
-            self.t.join()
+        if self.https:
+            if self.t:
+                with self.cond:
+                    self.cond.notify_all()
+                self.https.shutdown()
+                self.t.join()
+            self.https.server_close()
             self.https = None
             self.t = None
-        if self.unix and self.tu:
-            with self.cond:
-                self.cond.notify_all()
-            self.unix.shutdown()
-            self.tu.join()
+        if self.unix:
+            if self.tu:
+                with self.cond:
+                    self.cond.notify_all()
+                self.unix.shutdown()
+                self.tu.join()
+            self.unix.server_close()
             self.unix = None
             self.tu = None

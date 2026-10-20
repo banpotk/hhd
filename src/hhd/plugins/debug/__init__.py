@@ -8,7 +8,7 @@ from typing import Sequence
 from hhd.i18n import _
 from hhd.plugins import Context, HHDPlugin, HHDSettings, load_relative_yaml
 from hhd.plugins.conf import Config
-from hhd.utils import GIT_ADJ, GIT_HHD, HHD_DEV_DIR
+from hhd.utils import GIT_HHD, HHD_DEV_DIR
 
 from .logs import get_log
 
@@ -21,7 +21,7 @@ USES_BETA = os.environ.get("HHD_SWITCH_ROOT", "0") == "1"
 
 def prepare_hhd_dev(ev):
     try:
-        os.makedirs(HHD_DEV_DIR, exist_ok=True)
+        os.makedirs(HHD_DEV_DIR, exist_ok=True, mode=0o700)
         subprocess.run(
             ["python3", "-m", "venv", "--system-site-packages", HHD_DEV_DIR], check=True
         )
@@ -30,10 +30,12 @@ def prepare_hhd_dev(ev):
                 f"{HHD_DEV_DIR}/bin/pip",
                 "install",
                 "--upgrade",
+                # Beta commits share a version; reinstall HHD, not system dependencies.
+                "--force-reinstall",
+                "--no-deps",
                 "--cache-dir",
                 "/tmp/__hhd_update_cache",
                 GIT_HHD,
-                GIT_ADJ,
             ],
             check=True,
         )

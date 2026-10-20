@@ -1,0 +1,38 @@
+title: TDP Settings
+type: container
+tags: [hide-title]
+children:
+  tdp:
+    title: TDP
+    type: int
+    min: 5
+    max: 28
+    default: 15
+    step: 1
+    unit: W
+  boost:
+    title: TDP Boost
+    type: bool
+    default: True
+  fan:
+    title: Custom Fan Curve
+    type: mode
+    default: disabled
+    modes:
+      disabled:
+        title: Disabled
+        type: container
+      manual:
+        title: Manual
+        type: container
+        children:
+          info:
+            title: ""
+            type: display
+          reset:
+            title: Reset to Default
+            type: action
+  error:
+    title: Error
+    type: display
+    tags: [error, non-essential]

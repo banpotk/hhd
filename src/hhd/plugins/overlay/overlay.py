@@ -33,12 +33,21 @@ def find_overlay_exe(uid: Context | int | None = None) -> str | None:
 def inject_overlay(fn: str, display: str, uid: int):
     out = subprocess.Popen(
         [fn],
-        env={"HOME": expanduser("~", uid), "DISPLAY": display, "STEAM_OVERLAY": "1"},
+        env={
+            "HOME": expanduser("~", uid),
+            "DISPLAY": display,
+            "STEAM_OVERLAY": "1",
+            # The AppImage runtime needs PATH to find fusermount.
+            "PATH": "/usr/bin:/bin",
+        },
         text=True,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        preexec_fn=lambda: os.setpgrp(), # allow closing the overlay smoothly
+        # hhd-ui is commonly an AppImage. Keep Electron and all of its helper
+        # processes in a separate process group so they can be stopped before
+        # the AppImage mount is torn down.
+        start_new_session=True,
         user=uid,
         group=get_gid(uid),
     )
@@ -53,11 +62,14 @@ def launch_overlay_de(fn: str, display: str, auth: str | None, uid: int, gid: in
             "XAUTHORITY": auth or "",
             "DISPLAY": display,
             "HHD_MANAGED": "1",
+            # The AppImage runtime needs PATH to find fusermount.
+            "PATH": "/usr/bin:/bin",
         },
         text=True,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=True,
         user=uid,
         group=gid,
     )

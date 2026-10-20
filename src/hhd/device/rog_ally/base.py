@@ -2,7 +2,7 @@ import logging
 import select
 import time
 from threading import Event as TEvent
-from typing import Sequence
+from typing import Sequence, Literal
 
 from hhd.controller import DEBUG_MODE, Axis, Event, Multiplexer, can_read
 from hhd.controller.lib.hide import unhide_all
@@ -18,7 +18,7 @@ from hhd.controller.physical.hidraw import GenericGamepadHidraw, enumerate_uniqu
 from hhd.controller.physical.imu import CombinedImu, HrtimerTrigger
 from hhd.plugins import Config, Context, Emitter, get_limits, get_outputs
 
-from .const import config_rgb
+from .const import config_rgb, FEATURE_KBD_DRIVER
 from .hid import RgbCallback, switch_mode
 
 SELECT_TIMEOUT = 1
@@ -100,7 +100,7 @@ ALLY_X_BUTTON_MAP: dict[int, GamepadButton] = to_map(
         "start": [EC("BTN_TR")],
         "select": [EC("BTN_TL")],
         # Misc
-        # "mode": [EC("BTN_MODE")],
+        "share": [EC("BTN_SELECT")], # xbox
     }
 )
 
@@ -136,14 +136,29 @@ class AllyHidraw(GenericGamepadHidraw):
         self.queue: list[tuple[Event, float]] = []
         a = super().open()
         if self.dev:
-            logger.info(f"Switching Ally Controller to gamepad mode.")
             # Setup leds so they dont interfere after this
             self.dev.write(config_rgb(self.rgb_boot, self.rgb_charging))
+        self.initialize()
+        self.late_init = time.perf_counter()
+        return a
+
+    def initialize(self):
+        if self.dev:
+            logger.info(f"Switching Ally Controller to gamepad mode.")
             switch_mode(self.dev, "default", self.kconf, first=True)
 
         self.mouse_mode = False
-        self.late_init = time.perf_counter()
-        return a
+
+    def toggle_mouse_mode(self):
+        if not self.dev:
+            return
+        switch_mode(self.dev, "default" if self.mouse_mode else "mouse", self.kconf)
+        self.mouse_mode = not self.mouse_mode
+        if self.mouse_mode:
+            # Xbox Ally firmware supplies the first vibration on a right hold.
+            curr = time.perf_counter()
+            self.queue.append((VIBRATION_ON, curr + 2 * VIBRATION_DELAY))
+            self.queue.append((VIBRATION_OFF, curr + 3 * VIBRATION_DELAY))
 
     def produce(self, fds: Sequence[int]) -> Sequence[Event]:
         # If we can not read return
@@ -173,7 +188,7 @@ class AllyHidraw(GenericGamepadHidraw):
         while can_read(self.fd):
             rep = self.dev.read(self.report_size)
             # logger.warning(f"Received the following report (debug):\n{rep.hex()}")
-            if rep[0] != 0x5A:
+            if rep[0] != FEATURE_KBD_DRIVER:
                 continue
 
             match rep[1]:
@@ -186,16 +201,16 @@ class AllyHidraw(GenericGamepadHidraw):
                             curr + MODE_DELAY,
                         )
                     )
-                case 0x38:
+                case 0x38 | 0x93 | 0xA0:
                     # action = "right"
-                    out.append({"type": "button", "code": "share", "value": True})
+                    out.append({"type": "button", "code": "keyboard", "value": True})
                     self.queue.append(
                         (
-                            {"type": "button", "code": "share", "value": False},
+                            {"type": "button", "code": "keyboard", "value": False},
                             curr + MODE_DELAY,
                         )
                     )
-                case 0xA7:
+                case 0xA7 | 0xA4:
                     # right hold
                     # Mode switch
                     if self.mouse_mode:
@@ -261,10 +276,14 @@ def plugin_run(
     should_exit: TEvent,
     updated: TEvent,
     ally_x: bool,
+    xbox: bool,
+    woke_up: TEvent,
+    x20: bool = False,
 ):
     init = time.perf_counter()
     repeated_fail = False
     first = True
+
     while not should_exit.is_set():
         try:
             gamepad_devs = enumerate_evs(vid=GAMEPAD_VID)
@@ -280,7 +299,9 @@ def plugin_run(
             logger.info("Launching emulated controller.")
             updated.clear()
             init = time.perf_counter()
-            controller_loop(conf.copy(), should_exit, updated, emit, ally_x)
+            controller_loop(
+                conf.copy(), should_exit, updated, emit, ally_x, xbox, woke_up, x20
+            )
             repeated_fail = False
         except Exception as e:
             first = True
@@ -290,13 +311,6 @@ def plugin_run(
             )
             repeated_fail = failed_fast
             logger.error(f"Received the following error:\n{type(e)}:")
-
-            try:
-                import traceback
-
-                traceback.print_exc()
-            except Exception:
-                pass
 
             logger.error(
                 f"Assuming controllers disconnected, restarting after {sleep_time}s."
@@ -311,7 +325,14 @@ def plugin_run(
 
 
 def controller_loop(
-    conf: Config, should_exit: TEvent, updated: TEvent, emit: Emitter, ally_x: bool
+    conf: Config,
+    should_exit: TEvent,
+    updated: TEvent,
+    emit: Emitter,
+    ally_x: bool,
+    xbox: bool,
+    woke_up: TEvent,
+    x20: bool = False,
 ):
     debug = DEBUG_MODE
 
@@ -333,6 +354,9 @@ def controller_loop(
         extra_buttons="dual",
     )
     motion = d_params.get("uses_motion", True)
+
+    swap_armoury = conf.get("swap_armory", False)
+    swap_xbox = conf.get("swap_xbox", False) and xbox
 
     # Imu
     d_imu = CombinedImu(conf["imu_hz"].to(int), ALLY_MAPPINGS, gyro_scale="0.000266")
@@ -394,9 +418,22 @@ def controller_loop(
         capabilities={EC("EV_KEY"): [EC("KEY_F23")]},
         required=True,
         grab=False,
-        btn_map={EC("KEY_F17"): "extra_l1", EC("KEY_F18"): "extra_r1"},
+        btn_map={
+            EC("KEY_F17"): "extra_l1",
+            EC("KEY_F18"): "extra_r1",
+            **({EC("KEY_F22"): "mouse_mode"} if xbox else {}),  # type: ignore
+        },
     )
     d_kbd_grabbed = False
+
+    if swap_armoury and swap_xbox:
+        swap_guide = "xa_xbox_is_xbox_rev" # fix
+    elif swap_xbox:
+        swap_guide = "xa_xbox_is_xbox" # fix
+    elif swap_armoury:
+        swap_guide = "start_is_keyboard"
+    else:
+        swap_guide = None
 
     multiplexer = Multiplexer(
         trigger="analog_to_discrete",
@@ -405,8 +442,10 @@ def controller_loop(
         select_reboots=conf["select_reboots"].to(bool),
         nintendo_mode=conf["nintendo_mode"].to(bool),
         emit=emit,
-        swap_guide="select_is_guide" if conf["swap_armory"].to(bool) else None,
-        qam_no_release=not conf["swap_armory"].to(bool),
+        swap_guide=swap_guide, # type: ignore
+        qam_hhd="full",
+        keyboard_is="qam",
+        keyboard_no_release=not swap_armoury,
         params=d_params,
     )
 
@@ -442,6 +481,7 @@ def controller_loop(
         for d in d_producers:
             prepare(d)
 
+        woke_up.set()
         logger.info("Emulated controller launched, have fun!")
         while not should_exit.is_set() and not updated.is_set():
             start = time.perf_counter()
@@ -457,10 +497,47 @@ def controller_loop(
                     evs.extend(d.produce(r))
             evs.extend(d_vend.produce(r))
 
+            # Xbox Ally X units (only) map the right button hold to F22
+            if xbox:
+                for ev in evs:
+                    if ev["type"] == "button" and ev["code"] == "mouse_mode":
+                        if ev["value"]:
+                            d_vend.toggle_mouse_mode()
+                        ev["code"] = ""  # type: ignore
+
             evs = multiplexer.process(evs)
             if evs:
                 if debug:
                     logger.info(evs)
+
+            # Restore controller state after wakeup.
+            if ally_x and xbox and woke_up.is_set():
+                woke_up.clear()
+                multiplexer.refresh()  # make rgb be sent again
+                if x20:
+                    # X20 has no dynamic lighting interface and loses its
+                    # controller configuration during sleep some times.
+                    d_vend.initialize()
+                else:
+                    d_dynled = GenericGamepadHidraw(
+                        vid=[ASUS_VID],
+                        pid=[ALLY_X_PID],
+                        application=[0x00590001],
+                    )
+                    try:
+                        d_dynled.open()
+                        logger.info("Disabling dynamic lighting.")
+                        assert d_dynled.dev is not None
+                        d_dynled.dev.write(bytes([0x06, 0x01]))
+                    except Exception as e:
+                        logger.error(
+                            f"Error while disabling dynamic lighting with exception:\n{e}"
+                        )
+                    finally:
+                        try:
+                            d_dynled.close(False)
+                        except Exception:
+                            pass
 
             d_vend.consume(evs)
             d_xinput.consume(evs)

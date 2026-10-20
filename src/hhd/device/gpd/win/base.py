@@ -14,6 +14,7 @@ from hhd.controller.physical.evdev import B as EC
 from hhd.controller.physical.evdev import GenericGamepadEvdev
 from hhd.controller.physical.hidraw import GenericGamepadHidraw
 from hhd.controller.physical.imu import CombinedImu, HrtimerTrigger
+from hhd.controller.virtual.uinput import UInputDevice
 from hhd.plugins import Config, Context, Emitter, get_gyro_state, get_outputs
 
 from .const import (
@@ -31,9 +32,10 @@ LONGER_ERROR_MARGIN = 1.3
 logger = logging.getLogger(__name__)
 
 # Old devices were 2f24:0135
+# Win 5 new firmware uses 2f24:0137
 # New 2025 Win mini uses 045e:002d
 GPD_WIN_VIDS = [0x2F24, 0x045E]
-GPD_WIN_PIDS = [0x0135, 0x002D]
+GPD_WIN_PIDS = [0x0135, 0x0137, 0x002D]
 GAMEPAD_VID = 0x045E
 GAMEPAD_PID = 0x028E
 
@@ -44,7 +46,13 @@ TOUCHPAD_PID = 0x0255
 TOUCHPAD_VID_2 = 0x0911
 TOUCHPAD_PID_2 = 0x5288
 
+KBD_VID = 0x0001
+KBD_PID = 0x0001
+
 BACK_BUTTON_DELAY = 0.025
+DIRECT_BUTTONS = {
+    EC("KEY_F13"): "share",
+}
 
 # /dev/input/event17 Microsoft X-Box 360 pad usb-0000:73:00.3-4.1/input0
 # bus: 0003, vendor 045e, product 028e, version 0101
@@ -66,13 +74,16 @@ BACK_BUTTON_DELAY = 0.025
 LEFT_BUTTONS = {
     EC("KEY_SYSRQ"),
     EC("KEY_F20"),
+    EC("KEY_F14"),
+    EC("KEY_L"),
 }
 
 RIGHT_BUTTONS = {
     EC("KEY_PAUSE"),
     EC("KEY_F21"),
+    EC("KEY_F15"),
+    EC("KEY_R")
 }
-
 
 class BackbuttonsEvdev(GenericGamepadEvdev):
     def __init__(self, *args, **kwargs) -> None:
@@ -98,6 +109,16 @@ class BackbuttonsEvdev(GenericGamepadEvdev):
                     continue
 
                 pressed = e.value != 0
+
+                if e.code in DIRECT_BUTTONS:
+                    out.append(
+                        {
+                            "type": "button",
+                            "code": DIRECT_BUTTONS[e.code],
+                            "value": pressed,
+                        }
+                    )
+                    continue
 
                 if e.code in LEFT_BUTTONS:
                     if pressed:
@@ -250,37 +271,58 @@ def controller_loop(
         required=False,
     )
 
-    # Vendor
+    # Vendor back buttons
     d_kbd_1 = BackbuttonsEvdev(
         vid=GPD_WIN_VIDS,
         pid=GPD_WIN_PIDS,
         capabilities={EC("EV_KEY"): [EC("KEY_SYSRQ"), EC("KEY_PAUSE")]},
         required=True,
         grab=True,
-        # btn_map={EC("KEY_SYSRQ"): "extra_l1", EC("KEY_PAUSE"): "extra_r1"},
     )
 
-    match conf["l4r4"].to(str):
-        case "l4":
-            qam_button = "extra_l1"
-            l4r4_enabled = True
-            qam_hold = "hhd"
-        case "r4":
-            qam_button = "extra_r1"
-            l4r4_enabled = True
-            qam_hold = "hhd"
-        case "menu":
-            qam_button = "mode"
-            l4r4_enabled = True
-            qam_hold = "mode"
-        case "disabled":
-            qam_button = None
-            l4r4_enabled = False
-            qam_hold = "hhd"
-        case _:
-            qam_button = None
-            l4r4_enabled = True
-            qam_hold = "hhd"
+    grab_at = dconf.get("grab_at", True)
+    d_kbd_2 = None
+    dedicated_hhd_button = dconf.get("dedicated_hhd_button", False)
+    share_to_qam = dedicated_hhd_button
+    btn_map = dconf.get("btn_mapping", None)
+    if btn_map:
+        d_kbd_2 = GenericGamepadEvdev(
+            vid=[KBD_VID],
+            pid=[KBD_PID],
+            required=False,
+            grab=grab_at,
+            btn_map=btn_map,
+        )
+        share_to_qam = True
+
+    if dconf.get("manage_l4r4", True):
+        match conf["l4r4"].to(str):
+            case "l4":
+                qam_button = "extra_l1"
+                l4r4_enabled = True
+                qam_hold = "hhd"
+            case "r4":
+                qam_button = "extra_r1"
+                l4r4_enabled = True
+                qam_hold = "hhd"
+            case "menu":
+                qam_button = "mode"
+                l4r4_enabled = True
+                qam_hold = "mode"
+            case "disabled":
+                qam_button = None
+                l4r4_enabled = False
+                qam_hold = "hhd"
+            case _:
+                qam_button = None
+                l4r4_enabled = True
+                qam_hold = "hhd"
+    else:
+        qam_button = None
+        l4r4_enabled = True
+        qam_hold = "hhd"
+
+    keyboard_is = "steam_qam" if dedicated_hhd_button else "keyboard"
 
     if has_touchpad:
         touch_actions = (
@@ -296,10 +338,13 @@ def controller_loop(
             touchpad_hold=touch_actions.get("hold", "disabled"),
             nintendo_mode=conf["nintendo_mode"].to(bool),
             qam_button=qam_button,
+            share_to_qam=share_to_qam,
             emit=emit,
             params=d_params,
             # qam_multi_tap=qam_multi_tap, # supports it now
             qam_hold=qam_hold,
+            keyboard_is=keyboard_is,
+            qam_hhd=dedicated_hhd_button,
             startselect_chord=conf.get("main_chords", "disabled"),
         )
     else:
@@ -308,12 +353,28 @@ def controller_loop(
             dpad="analog_to_discrete",
             nintendo_mode=conf["nintendo_mode"].to(bool),
             qam_button=qam_button,
+            share_to_qam=share_to_qam,
             emit=emit,
             params=d_params,
             # qam_multi_tap=qam_multi_tap, # supports it now
             qam_hold=qam_hold,
+            keyboard_is=keyboard_is,
+            qam_hhd=dedicated_hhd_button,
             startselect_chord=conf.get("main_chords", "disabled"),
         )
+
+    d_volume_btn = UInputDevice(
+        name="Handheld Daemon Volume Keyboard",
+        phys="phys-hhd-vbtn",
+        capabilities={EC("EV_KEY"): [EC("KEY_VOLUMEUP"), EC("KEY_VOLUMEDOWN")]},
+        btn_map={
+            "key_volumeup": EC("KEY_VOLUMEUP"),
+            "key_volumedown": EC("KEY_VOLUMEDOWN"),
+        },
+        pid=KBD_PID,
+        vid=KBD_VID,
+        output_timestamps=True,
+    )
 
     REPORT_FREQ_MIN = 25
     REPORT_FREQ_MAX = 400
@@ -336,6 +397,7 @@ def controller_loop(
             fd_to_dev[f] = m
 
     try:
+        hid_btn_fds = []
         if l4r4_enabled:
             kbd_fds = d_kbd_1.open()
             fds.extend(kbd_fds)
@@ -363,6 +425,10 @@ def controller_loop(
                 traceback.print_exc()
         if has_touchpad and d_params["uses_touch"]:
             prepare(d_touch)
+        if grab_at and d_kbd_2:
+            prepare(d_volume_btn)
+        if d_kbd_2:
+            prepare(d_kbd_2)
         for d in d_producers:
             prepare(d)
 
@@ -374,8 +440,8 @@ def controller_loop(
             evs = []
             to_run = set()
             for f in r:
-                # skip kbd_1 to always run it
-                if f not in kbd_fds:
+                # skip kbd_1 and hid_btns to always run them
+                if f not in kbd_fds and f not in hid_btn_fds:
                     to_run.add(id(fd_to_dev[f]))
 
             for d in devs:
@@ -387,6 +453,7 @@ def controller_loop(
             if evs:
                 if debug:
                     logger.info(evs)
+                d_volume_btn.consume(evs)
                 d_xinput.consume(evs)
 
             for d in d_outs:

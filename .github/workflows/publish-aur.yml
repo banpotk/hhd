@@ -13,10 +13,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - name: Create PKGBUILD dir
-        run: mkdir -p ./pkg/
-      - name: Build PKGBUILD
-        run: sed "s/pkgver=VERSION/pkgver=$(cat pyproject.toml | grep -E 'version = "[0-9\.]+"' -o | grep -E "[0-9\.]+" -o)/" PKGBUILD > ./pkg/PKGBUILD
+      - name: Copy PKGBUILD
+        run: |
+          mkdir -p ./pkg
+          cp ./PKGBUILD ./pkg/PKGBUILD
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.0
         with:

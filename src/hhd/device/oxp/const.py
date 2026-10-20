@@ -39,6 +39,26 @@ BTN_MAPPINGS_NONTURBO: dict[int, Button] = {
     B("KEY_O"): "share",
 }
 
+BTN_MAPPINGS_X2: dict[int, Button] = {
+    **BTN_MAPPINGS,
+    B("KEY_G"): "mode",
+    B("KEY_F15"): "extra_l1",
+    B("KEY_F16"): "extra_r1",
+}
+
+BTN_MAPPINGS_NONTURBO_X2: dict[int, Button] = {
+    **BTN_MAPPINGS_NONTURBO,
+    B("KEY_G"): "mode",
+    B("KEY_F15"): "extra_l1",
+    B("KEY_F16"): "extra_r1",
+}
+
+BTN_MAPPINGS_OXP3: dict[int, Button] = {
+    **BTN_MAPPINGS_X2,
+    B("KEY_O"): "share",  # Button 3: Turbo
+    B("KEY_F17"): "keyboard",  # Button 2: Keyboard (hwdb)
+}
+
 ONEX_DEFAULT_CONF = {
     "hrtimer": True,
 }
@@ -73,9 +93,10 @@ CONFS = {
     "AOKZOE A1X": {
         "name": "AOKZOE A1X",
         "hrtimer": True,
-        "protocol": "hid_v2",
+        "protocol": "hid_dual",
         "aok": True,
         "extra_buttons": "none",
+        "vibration": True,
     },
     # Onexplayer
     "ONE XPLAYER": {"name": "ONE XPLAYER", **ONEX_DEFAULT_CONF},
@@ -92,6 +113,13 @@ CONFS = {
     "ONEXPLAYER F1 OLED": OXP_F1_CONF,
     "ONEXPLAYER F1Pro": OXP_F1_CONF,
     "ONEXPLAYER F1 EVA-02": OXP_F1_CONF,  # F1Pro variant
+    "ONEXPLAYER APEX": {
+        "name": "ONEXPLAYER APEX",
+        **ONEX_DEFAULT_CONF,
+        "quirk": "apex",
+        "protocol": "hid_dual",
+        "vibration": True,
+    },
     # OXP 2
     "ONEXPLAYER 2": OXP_2_CONF,
     "ONEXPLAYER 2 ARP23": OXP_2_CONF,
@@ -99,6 +127,14 @@ CONFS = {
     # Pro is a bit different
     "ONEXPLAYER 2 PRO ARP23": OXP_2_CONF,
     "ONEXPLAYER 2 PRO ARP23 EVA-01": OXP_2_CONF,
+    # OXP 3
+    "ONEXPLAYER 3": {
+        "name": "ONEXPLAYER 3",
+        "quirk": "oxp3",
+        **ONEX_DEFAULT_CONF,
+        "rgb_secondary": True,
+        "protocol": "hid_v2_x2",
+    },
     # X1 Line
     "ONEXPLAYER X1 mini": {
         **ONEX_DEFAULT_CONF,
@@ -145,7 +181,6 @@ CONFS = {
         "rgb_secondary": True,
         "mapping": X1_MAPPING,
         "protocol": "serial",
-        "turbo": True,  # disable turbo takeover so that it can be used for TDP
     },
     "ONEXPLAYER X1 i": {
         **ONEX_DEFAULT_CONF,
@@ -154,21 +189,37 @@ CONFS = {
         "rgb_secondary": True,
         "mapping": X1_MAPPING,
         "protocol": "serial",
-        "turbo": False,  # disable turbo takeover so that it can be used for TDP
+    },
+    "ONEXPLAYER X1Air": {
+        **ONEX_DEFAULT_CONF,
+        "name": "ONEXPLAYER X1 (Intel)",
+        "x1": True,
+        "rgb_secondary": True,
+        "mapping": X1_MAPPING,
+        "protocol": "hid_v1",
+    },
+    # X2 Line
+    "ONEXPLAYER X2Mini PRO": {
+        **ONEX_DEFAULT_CONF,
+        "name": "ONEXPLAYER X2 Mini Pro",
+        "quirk": "x2mini_pro",
+        "x1": True,
+        "rgb_secondary": True,
+        "rgb_secondary_breathing": True,
+        "mapping": X1_MINI_MAPPING,
+        "protocol": "hid_v2_x2",
     },
     "ONEXPLAYER G1 i": {
         **ONEX_DEFAULT_CONF,
         "name": "ONEXPLAYER G1 (Intel)",
         "g1": True,
         "protocol": "hid_v1_g1",
-        "turbo": False,  # disable turbo takeover so that it can be used for TDP
     },
     "ONEXPLAYER G1 A": {
         **ONEX_DEFAULT_CONF,
         "name": "ONEXPLAYER G1 (AMD)",
         "g1": True,
         "protocol": "hid_v1_g1",
-        "turbo": True,  # disable turbo takeover so that it can be used for TDP
     },
 }
 

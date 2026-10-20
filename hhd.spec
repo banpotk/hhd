@@ -1,11 +1,11 @@
 Name:           hhd
-Version:        REPLACE_VERSION
+Version:        4.1.12
 Release:        1%{?dist}
 Summary:        Handheld Daemon, a tool for configuring handheld devices.
 
-License:        GPL-3.0-or-later AND MIT
+License:        LGPL-2.1-or-later
 URL:            https://github.com/hhd-dev/hhd
-Source:        	https://pypi.python.org/packages/source/h/%{name}/%{name}-%{version}.tar.gz   
+Source:       	https://github.com/hhd-dev/hhd/archive/refs/tags/v%{version}.tar.gz
 
 BuildArch:      noarch
 BuildRequires:  systemd-rpm-macros
@@ -14,6 +14,7 @@ BuildRequires:  python3-build
 BuildRequires:  python3-installer
 BuildRequires:  python3-setuptools
 BuildRequires:  python3-wheel
+BuildRequires:  python3-babel
 
 Requires:       python3
 Requires:       python3-evdev
@@ -22,8 +23,12 @@ Requires:       python3-yaml
 Requires:       python3-setuptools
 Requires:       python3-xlib
 Requires:       python3-pyserial
+Requires:       python3-pyroute2
+Requires:       python3-gobject
 Requires:       libusb1
 Requires:       hidapi
+
+Obsoletes:      adjustor
 
 %description
 Handheld Daemon is a project that aims to provide utilities for managing handheld devices. With features ranging from TDP controls, to controller remappings, and gamescope session management. This will be done through a plugin system and an HTTP(/d-bus?) daemon, which will expose the settings of the plugins in a UI agnostic way.
@@ -32,6 +37,9 @@ Handheld Daemon is a project that aims to provide utilities for managing handhel
 %autosetup -n %{name}-%{version}
 
 %build
+%{python3} -m babel.messages.frontend compile -D hhd -d ./i18n
+%{python3} -m babel.messages.frontend compile -D adjustor -d ./i18n || true
+cp -rf ./i18n/* ./src/hhd/i18n
 %{python3} -m build --wheel --no-isolation
 
 %install
@@ -53,3 +61,6 @@ install -m644 usr/lib/systemd/system/%{name}.service %{buildroot}%{_unitdir}/%{n
 %{_sysconfdir}/udev/hwdb.d/83-%{name}.hwdb
 %{_unitdir}/%{name}@.service
 %{_unitdir}/%{name}.service
+
+%{python3_sitelib}/adjustor*
+# %{_datarootdir}/dbus-1/system.d/%{name}-net.hadess.PowerProfiles.conf

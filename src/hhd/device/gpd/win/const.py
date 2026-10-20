@@ -1,5 +1,6 @@
 from hhd.controller import Axis, Button
 from hhd.controller.physical.evdev import B, to_map
+from hhd.controller.physical.hidraw import BM
 from hhd.plugins import gen_gyro_state
 
 GPD_TOUCHPAD_BUTTON_MAP: dict[int, Button] = to_map(
@@ -38,3 +39,14 @@ GPD_WIN_MAX_2_2023_MAPPINGS: dict[str, tuple[Axis, str | None, float, float | No
 }
 
 GPD_WIN_4_8840U_MAPPINGS = gen_gyro_state("z", True, "x", False, "y", True)
+
+GPD_WIN_5_MAPPINGS = gen_gyro_state("z", True, "x", False, "y", True)
+
+GPD_WIN_5_BTN_MAPPINGS: dict[int, Button] = {
+    B("KEY_VOLUMEUP"): "key_volumeup",
+    B("KEY_VOLUMEDOWN"): "key_volumedown",
+    B("KEY_O"): "keyboard",  # Keyboard button: LMETA + LCTRL + O
+    B("KEY_DELETE"): "keyboard",  # Keyboard button hold: DEL
+    B("KEY_D"): "mode",  # Home button: LMETA + D
+    B("KEY_TAB"): "mode",  # Home button hold: TAB
+}

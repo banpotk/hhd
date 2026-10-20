@@ -16,6 +16,14 @@ from hhd.plugins.conf import Config
 logger = logging.getLogger(__name__)
 
 REFRESH_HZ = 3
+AUTOMATIC_UPDATE_UPTIME = 5 * 60
+AUTOMATIC_UPDATE_RETRY = 5 * 60
+AUTOMATIC_UPDATE_INTERVALS = {
+    "daily": 24 * 60 * 60,
+    "weekly": 7 * 24 * 60 * 60,
+    "monthly": 30 * 24 * 60 * 60,
+}
+CPU_LOAD_LIMIT = 0.2
 PROGRESS_STAGES = {
     "pulling": (_("Downloading:"), 0, 80),
     "importing": (_("Importing:"), 80, 10),
@@ -25,8 +33,12 @@ PROGRESS_STAGES = {
 
 BOOTC_ENABLED = os.environ.get("HHD_BOOTC", "0") == "1"
 BOOTC_PATH = os.environ.get("HHD_BOOTC_PATH", "bootc")
+FLATPAK_PATH = os.environ.get("HHD_FLATPAK_PATH", "flatpak")
 BRANCHES = os.environ.get(
-    "HHD_BOOTC_BRANCHES", "stable:Stable,testing:Testing,unstable:Unstable"
+    "HHD_BOOTC_BRANCHES", "stable:Stable,rolling:Rolling,testing:Testing"
+)
+DEFAULT_URI=os.environ.get(
+    "HHD_BOOTC_FALLBACK_IMG", ""
 )
 
 REF_PREFIX = "§ "
@@ -65,6 +77,25 @@ BOOTC_UPDATE_CMD = [
     "update",
 ]
 
+BOOTC_SWITCH_CMD = [
+    BOOTC_PATH,
+    "switch",
+]
+
+FLATPAK_UPDATE_CMD = [
+    FLATPAK_PATH,
+    "update",
+    "--system",
+    "--assumeyes",
+    "--noninteractive",
+]
+
+if os.environ.get("HHD_BOOTC_SOFT_REBOOT", "0") == "1":
+    SOFT_REBOOT = "--soft-reboot=auto"
+    BOOTC_UPDATE_CMD.append(SOFT_REBOOT)
+    BOOTC_SWITCH_CMD.append(SOFT_REBOOT)
+    BOOTC_ROLLBACKCMD.append(SOFT_REBOOT)
+
 SKOPEO_REBASE_CMD = lambda ref: ["skopeo", "inspect", "docker://" + ref]
 
 
@@ -76,6 +107,7 @@ STAGES = Literal[
     "ready_reverted",
     "ready_rebased",
     "incompatible",
+    "unknown",
     "rebase_dialog",
     "loading",
     "loading_rebase",
@@ -85,7 +117,7 @@ STAGES = Literal[
 
 def get_bootc_status():
     try:
-        output = subprocess.check_output(BOOTC_STATUS_CMD).decode("utf-8")
+        output = subprocess.check_output(BOOTC_STATUS_CMD, stderr=subprocess.DEVNULL).decode("utf-8")
         return json.loads(output)
     except Exception as e:
         logger.error(f"Failed to get bootc status: {e}")
@@ -104,7 +136,7 @@ def get_branch(ref: str, branches: dict, fallback: bool = True):
     curr_tag = ref[ref.rindex(":") + 1 :]
 
     for branch in branches:
-        if branch in curr_tag:
+        if curr_tag.startswith(branch):
             return branch
 
     if not fallback:
@@ -206,6 +238,30 @@ def run_command_threaded_progress(cmd: list, emit, friendly, lock):
         return None, None
 
 
+def _flatpak_output_reader(fd, output: list[str]):
+    try:
+        for line in fd:
+            output.append(line)
+    except Exception as e:
+        logger.error(f"Failed to read Flatpak update output: {e}")
+    finally:
+        fd.close()
+
+
+def get_system_uptime() -> float:
+    try:
+        with open("/proc/uptime", "r") as f:
+            return float(f.read().split()[0])
+    except Exception as e:
+        logger.error(f"Failed to read system uptime: {e}")
+        return 0
+
+
+def get_normalized_cpu_load() -> float:
+    cpus = os.cpu_count() or 1
+    return os.getloadavg()[0] / cpus
+
+
 def is_incompatible(status: dict):
     if status.get("apiVersion", None) != "org.containers.bootc/v1":
         return True
@@ -235,6 +291,7 @@ class BootcPlugin(HHDPlugin):
         self.branch_name = None
         self.branch_ref = None
         self.checked_update = False
+        self.check_update_available: bool | None = None
         self.t = None
         self.t_data = None
         self.progress_lock = Lock()
@@ -243,6 +300,11 @@ class BootcPlugin(HHDPlugin):
         self.cached_version = ""
         self.emit = None
         self.updating = False
+        self.flatpak_proc = None
+        self.flatpak_reader = None
+        self.flatpak_output: list[str] = []
+        self.update_all_pending = False
+        self.next_automatic_update_check = 0.0
 
         self.branches = {}
         for branch in BRANCHES.split(","):
@@ -255,9 +317,16 @@ class BootcPlugin(HHDPlugin):
 
     def settings(self) -> HHDSettings:
         sets = {
-            "updates": {"bootc": load_relative_yaml("settings.yml")},
-            "hhd": {"settings": load_relative_yaml("general.yml")},
+            "updates": {
+                "updates": load_relative_yaml("updates.yml"),
+                "bootc": load_relative_yaml("settings.yml"),
+            },
         }
+
+        if shutil.which(FLATPAK_PATH):
+            sets["updates"]["applications"] = load_relative_yaml(
+                "applications.yml"
+            )
 
         sets["updates"]["bootc"]["children"]["stage"]["modes"]["rebase"][
             "children"
@@ -292,7 +361,6 @@ class BootcPlugin(HHDPlugin):
             conf["updates.bootc.stage.mode"] = "incompatible"
             self.state = "incompatible"
             conf[f"updates.bootc.update"] = None
-            conf[f"updates.bootc.steamos-update"] = "incompatible"
             return
 
         ref = ((self.status.get("spec", None) or {}).get("image", None) or {}).get(
@@ -301,6 +369,12 @@ class BootcPlugin(HHDPlugin):
         img = ref
         if "/" in img:
             img = img[img.rfind("/") + 1 :]
+
+        if not img and DEFAULT_URI:
+            conf["updates.bootc.stage.mode"] = "unknown"
+            self.state = "unknown"
+            conf[f"updates.bootc.update"] = None
+            return
 
         # Find branch and replace tag
         branch = get_branch(img, self.branches)
@@ -357,49 +431,231 @@ class BootcPlugin(HHDPlugin):
         self.updated = True
 
         cached = self.status.get("status", {}).get("booted", {}).get("cachedUpdate", {})
-        cached_version = cached.get("version", "") if cached else ""
+        cached_version = (cached.get("version") or "") if cached else ""
         cached_img = cached.get("image", {}).get("image", "") if cached else ""
         if "/" in cached_img:
             cached_img = cached_img[cached_img.rfind("/") + 1 :]
-        self.cached_version = cached_version
 
-        if self.checked_update:
+        if self.checked_update and self.check_update_available is False:
             conf[f"updates.bootc.update"] = _("No update available")
         else:
             conf[f"updates.bootc.update"] = None
 
-        if (
-            cached_version
+        staged_version = self.get_version("staged")
+        cached_update_available = (
+            bool(cached)
             and cached_img == img
-            and cached_version != self.get_version("staged")
-        ):
+            and (not staged_version or cached_version != staged_version)
+        )
+        self.cached_version = cached_version if cached_update_available else ""
+        checked_update_available = (
+            self.checked_update and self.check_update_available is True
+        )
+
+        if cached_update_available or checked_update_available:
             conf["updates.bootc.stage.mode"] = "ready"
             self.state = "ready"
-            conf[f"updates.bootc.update"] = cached_version
-            conf[f"updates.bootc.steamos-update"] = "has-update"
-        elif self.get_version("staged"):
+            conf[f"updates.bootc.update"] = self.cached_version or _(
+                "Update available"
+            )
+        elif staged_version:
             conf["updates.bootc.stage.mode"] = "ready_updated"
             self.state = "ready_updated"
-            conf[f"updates.bootc.steamos-update"] = "updated"
         elif has_rebased:
             conf["updates.bootc.stage.mode"] = "ready_rebased"
             self.state = "ready_rebased"
-            conf[f"updates.bootc.steamos-update"] = "updated"
         elif rollback:
             conf["updates.bootc.stage.mode"] = "ready_reverted"
             self.state = "ready_reverted"
-            conf[f"updates.bootc.steamos-update"] = "updated"
         else:
             conf["updates.bootc.stage.mode"] = "ready_check"
             self.state = "ready_check"
-            conf[f"updates.bootc.steamos-update"] = "ready"
 
     def update(self, conf: Config):
+        reboot = conf.get_action("updates.updates.reboot.ready.reboot")
+        update_all = conf.get_action("updates.updates.update_all")
+        frequency = conf.get("updates.updates.frequency", "weekly")
+        now = time.time()
+
+        if (
+            not update_all
+            and frequency in AUTOMATIC_UPDATE_INTERVALS
+            and now >= self.next_automatic_update_check
+        ):
+            self.next_automatic_update_check = now + AUTOMATIC_UPDATE_RETRY
+            last_attempt = conf.get("updates.updates.last_attempt", 0)
+            update_due = (
+                last_attempt <= 0
+                or now - last_attempt >= AUTOMATIC_UPDATE_INTERVALS[frequency]
+            )
+
+            if update_due:
+                conditions_met = False
+                unmet_condition = ""
+                if get_system_uptime() > AUTOMATIC_UPDATE_UPTIME:
+                    try:
+                        from gi.repository import Gio
+
+                        network = Gio.NetworkMonitor.get_default()
+                        has_internet = (
+                            network.get_network_available()
+                            and network.get_connectivity()
+                            == Gio.NetworkConnectivity.FULL
+                        )
+                        if not has_internet:
+                            unmet_condition = "internet connectivity is unavailable"
+                        elif conf.get(
+                            "updates.updates.conditions.unmetered", True
+                        ) and network.get_network_metered():
+                            unmet_condition = "the active network is metered"
+                        elif conf.get(
+                            "updates.updates.conditions.cpu_load", True
+                        ) and get_normalized_cpu_load() >= CPU_LOAD_LIMIT:
+                            unmet_condition = "CPU load is at or above 20%"
+                        else:
+                            conditions_met = True
+                    except Exception as e:
+                        unmet_condition = f"condition check failed: {e}"
+
+                if conditions_met:
+                    logger.info("Automatic update conditions met. Updating all.")
+                    update_all = True
+                elif unmet_condition:
+                    logger.error(
+                        "Automatic update deferred because %s. Retrying in five minutes.",
+                        unmet_condition,
+                    )
+
+        if update_all:
+            conf["updates.updates.last_attempt"] = int(now)
+            if "updates.applications.update" in conf:
+                conf["updates.applications.update"] = True
+            if not self.update_all_pending:
+                self.checked_update = False
+                self.update_all_pending = True
+
+        flatpak_update = conf.get_action("updates.applications.update")
+
+        if self.flatpak_proc:
+            exit_code = self.flatpak_proc.poll()
+            if exit_code is not None:
+                if self.flatpak_reader:
+                    self.flatpak_reader.join()
+
+                output = "".join(self.flatpak_output).strip()
+                if output:
+                    log = logger.info if exit_code == 0 else logger.error
+                    log("Flatpak update output:\n%s", output)
+
+                self.flatpak_proc = None
+                self.flatpak_reader = None
+                self.flatpak_output = []
+                conf["updates.applications.progress"] = None
+
+                if exit_code == 0:
+                    conf["updates.applications.status"] = _(
+                        "Applications are up to date."
+                    )
+                    conf["updates.applications.error"] = None
+                else:
+                    conf["updates.applications.status"] = None
+                    conf["updates.applications.error"] = _(
+                        "Flatpak update failed with exit code"
+                    ) + f" {exit_code}."
+        elif flatpak_update:
+            conf["updates.applications.status"] = None
+            conf["updates.applications.error"] = None
+
+            try:
+                self.flatpak_output = []
+                self.flatpak_proc = subprocess.Popen(
+                    FLATPAK_UPDATE_CMD,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                assert self.flatpak_proc.stdout
+                self.flatpak_reader = Thread(
+                    target=_flatpak_output_reader,
+                    args=(self.flatpak_proc.stdout, self.flatpak_output),
+                )
+                self.flatpak_reader.start()
+                conf["updates.applications.progress"] = {
+                    "text": _("Updating applications..."),
+                    "value": None,
+                    "unit": None,
+                }
+            except Exception as e:
+                logger.error(f"Failed to start Flatpak update: {e}")
+                self.flatpak_proc = None
+                self.flatpak_reader = None
+                self.flatpak_output = []
+                conf["updates.applications.progress"] = None
+                conf["updates.applications.error"] = _(
+                    "Failed to start Flatpak update."
+                )
+
+        reboot_ready = (
+            self.state == "ready_updated"
+            and self.proc is None
+            and self.flatpak_proc is None
+            and not self.update_all_pending
+        )
+        conf["updates.updates.reboot.mode"] = (
+            "ready" if reboot_ready else "hidden"
+        )
+        if reboot and reboot_ready:
+            logger.info("User pressed reboot after updating all. Rebooting...")
+            subprocess.run(["reboot"])
 
         # Detect reset and avoid breaking the UI
         if conf.get("updates.bootc.stage.mode", None) is None:
             self._init(conf)
             return
+
+        if self.update_all_pending:
+            match self.state:
+                case "ready":
+                    conf["updates.bootc.stage.ready.update"] = True
+                    self.update_all_pending = False
+                case "ready_check":
+                    if self.checked_update:
+                        self.update_all_pending = False
+                    else:
+                        conf["updates.bootc.stage.ready_check.update"] = True
+                case "ready_updated":
+                    self.checked_update = False
+                    self.updating = True
+                    self.state = "loading_cancellable"
+                    if self.bootc_progress:
+                        self.proc, self.progress = run_command_threaded_progress(
+                            BOOTC_UPDATE_CMD,
+                            self.emit,
+                            self.cached_version or self.branch_name or "",
+                            self.progress_lock,
+                        )
+                    else:
+                        self.proc = run_command_threaded(BOOTC_UPDATE_CMD)
+                    conf["updates.bootc.stage.mode"] = "loading_cancellable"
+                    conf[
+                        "updates.bootc.stage.loading_cancellable.progress"
+                    ] = {
+                        "text": _("Updating... "),
+                        "value": None,
+                        "unit": None,
+                    }
+                    self.update_all_pending = False
+                case (
+                    "ready_rebased"
+                    | "ready_reverted"
+                    | "incompatible"
+                    | "unknown"
+                ):
+                    logger.info(
+                        "Skipping automatic bootc update in state '%s'.",
+                        self.state,
+                    )
+                    self.update_all_pending = False
 
         # Try to fill in basic info
         match self.state:
@@ -418,28 +674,11 @@ class BootcPlugin(HHDPlugin):
                 rebase = conf.get_action(f"updates.bootc.stage.{e}.rebase")
                 reboot = conf.get_action(f"updates.bootc.stage.{e}.reboot")
 
-                steamos = conf.get("updates.bootc.steamos-update", None)
-
-                # Handle steamos polkit
-                if steamos == "check":
-                    if not conf.get("hhd.settings.bootc_steamui", True):
-                        # Updates are disabled, return that there are none
-                        conf["updates.bootc.steamos-update"] = "ready"
-                    elif e == "ready":
-                        conf["updates.bootc.steamos-update"] = "has-update"
-                    elif e == "ready_rebased":
-                        # Make sure nothing funny happens on the rebase dialog
-                        conf["updates.bootc.steamos-update"] = "ready"
-                    else:
-                        update = True
-                if steamos == "apply":
-                    update = True
-
                 if update:
                     if e == "ready_rebased" and self.branch_ref:
                         self.checked_update = False
                         self.state = "loading_cancellable"
-                        cmd = [BOOTC_PATH, "switch", self.branch_ref]
+                        cmd = BOOTC_SWITCH_CMD + [self.branch_ref]
                         if self.bootc_progress:
                             self.proc, self.progress = run_command_threaded_progress(
                                 cmd,
@@ -480,6 +719,7 @@ class BootcPlugin(HHDPlugin):
                         self.state = "loading"
                         self.proc = run_command_threaded(BOOTC_CHECK_CMD)
                         self.checked_update = True
+                        self.check_update_available = None
                         conf["updates.bootc.stage.mode"] = "loading"
                         conf["updates.bootc.stage.loading.progress"] = {
                             "text": _("Checking for updates..."),
@@ -548,6 +788,24 @@ class BootcPlugin(HHDPlugin):
                         "text": _("Removing Customizations..."),
                         "value": None,
                         "unit": None,
+                    }
+            # Unknown
+            case "unknown":
+                if conf.get_action("updates.bootc.stage.unknown.update"):
+                    assert DEFAULT_URI # We were promised it
+                    self.state = "loading_cancellable"
+                    cmd = BOOTC_SWITCH_CMD + [DEFAULT_URI]
+                    if self.bootc_progress:
+                        self.proc, self.progress = run_command_threaded_progress(
+                            cmd, self.emit, DEFAULT_URI, self.progress_lock
+                        )
+                    else:
+                        self.proc = run_command_threaded(cmd)
+                    conf["updates.bootc.stage.mode"] = "loading_cancellable"
+                    conf["updates.bootc.stage.loading_cancellable.progress"] = {
+                        "text": _("Updating to "),
+                        "unit": DEFAULT_URI,
+                        "value": None,
                     }
 
             # Rebase dialog
@@ -622,7 +880,7 @@ class BootcPlugin(HHDPlugin):
                             self.proc = run_command_threaded(cmd)
                         conf["updates.bootc.stage.mode"] = "loading_cancellable"
                         conf["updates.bootc.stage.loading_cancellable.progress"] = {
-                            "text": _("Rebasing to "),
+                            "text": _("Updating to "),
                             "unit": self.branches.get(version, version),
                             "value": None,
                         }
@@ -663,17 +921,17 @@ class BootcPlugin(HHDPlugin):
                         conf["updates.bootc.stage.loading_cancellable.progress"] = (
                             self.progress
                         )
-                        val = self.progress.get("value", None)
-                        if val is not None:
-                            try:
-                                val = int(val)
-                                conf["updates.bootc.steamos-update"] = f"{val}%"
-                            except ValueError:
-                                pass
             case "loading":
                 if self.proc is None:
                     self._init(conf)
-                elif self.proc.poll() is not None:
+                elif (exit_code := self.proc.poll()) is not None:
+                    if self.checked_update:
+                        output = self.proc.stdout.read() if self.proc.stdout else b""
+                        if isinstance(output, bytes):
+                            output = output.decode("utf-8", errors="replace")
+                        self.check_update_available = (
+                            "Update available for " in output if exit_code == 0 else None
+                        )
                     self._init(conf)
                     self.proc = None
 
@@ -686,6 +944,15 @@ class BootcPlugin(HHDPlugin):
             if self.t.is_alive():
                 self.t.join()
             self.t = None
+        if self.flatpak_proc:
+            if self.flatpak_proc.poll() is None:
+                self.flatpak_proc.send_signal(signal.SIGINT)
+                self.flatpak_proc.wait()
+            if self.flatpak_reader:
+                self.flatpak_reader.join()
+            self.flatpak_proc = None
+            self.flatpak_reader = None
+            self.flatpak_output = []
 
 
 def autodetect(existing: Sequence[HHDPlugin]) -> Sequence[HHDPlugin]:

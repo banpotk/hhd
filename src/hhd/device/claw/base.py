@@ -436,6 +436,9 @@ def controller_loop(
     )
 
     # Inputs
+    ex = dconf.get("ex", False)
+    btn_mapping = dconf.get("btn_mapping", MSI_CLAW_MAPPINGS)
+
     extra_args = {
         "btn_map": DINPUT_BUTTON_MAP,
         "axis_map": DINPUT_AXIS_MAP,
@@ -458,16 +461,15 @@ def controller_loop(
         required=False,
         grab=True,
         capabilities={EC("EV_KEY"): [EC("KEY_F15")]},
-        btn_map=dconf.get("btn_mapping", MSI_CLAW_MAPPINGS),
+        btn_map=btn_mapping,
     )
-
 
     d_kbd_1 = MsiAtKbd(
         vid=[KBD_VID],
         pid=[KBD_PID],
         required=False,
         grab=True,
-        btn_map=dconf.get("btn_mapping", MSI_CLAW_MAPPINGS),
+        btn_map=btn_mapping,
     )
 
     # Mute these so after suspend we do not get stray keypresses
@@ -552,7 +554,8 @@ def controller_loop(
         prepare(d_xinput)
         prepare(d_volume_btn)
         prepare(d_kbd_1)
-        prepare(d_msi_wmi)
+        if not ex:
+            prepare(d_msi_wmi)
         if not test_mode:
             prepare(d_kbd_2)
             prepare(d_mouse)
@@ -594,7 +597,8 @@ def controller_loop(
 
             # Read delayed events
             evs.extend(d_kbd_1.produce([]))
-            evs.extend(d_msi_wmi.produce([]))
+            if not ex:
+                evs.extend(d_msi_wmi.produce([]))
 
             evs = multiplexer.process(evs)
             if evs:

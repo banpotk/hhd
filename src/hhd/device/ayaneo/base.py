@@ -6,7 +6,6 @@ from threading import Event as TEvent
 
 from hhd.controller import DEBUG_MODE, Multiplexer
 from hhd.controller.lib.hide import unhide_all
-from hhd.controller.physical.evdev import XBOX_BUTTON_MAP
 from hhd.controller.physical.evdev import B as EC
 from hhd.controller.physical.evdev import GenericGamepadEvdev, enumerate_evs
 from hhd.controller.physical.hidraw import GenericGamepadHidraw
@@ -17,8 +16,11 @@ from hhd.plugins import Config, Context, Emitter, get_gyro_state, get_outputs
 
 from .const import (
     AYA3_INIT,
+    AYA3_AT_BTN_MAPPINGS,
+    AYA3_BTN_MAPPINGS,
     AYA_CHECK,
     AYA_CUSTOM,
+    AYA_GAMEPAD_BTN_MAPPINGS,
     DEFAULT_MAPPINGS,
     AYA_SAVE,
     get_cfg_commands,
@@ -61,9 +63,13 @@ _cfg = {
 }
 
 CONTROLLER_POWER = (
-    "/sys/class/firmware-attributes/ayaneo-ec/attributes/controller_power/current_value"
+    "/sys/class/firmware-attributes/ayaneo-ec/attributes/controller_power/current_value",
+    "/sys/devices/platform/ayaneo-ec/controller_power",
 )
-CONTROLLER_MODULES = "/sys/class/firmware-attributes/ayaneo-ec/attributes/controller_modules/current_value"
+CONTROLLER_MODULES = [
+    "/sys/class/firmware-attributes/ayaneo-ec/attributes/controller_modules/current_value",
+    "/sys/devices/platform/ayaneo-ec/controller_modules",
+]
 
 
 def write_cmd(dev, r: bytes, timeout: int = AYA_TIMEOUT):
@@ -111,6 +117,40 @@ MODULE_ACTIVATING = _("Activating...")
 MODULE_UNPOWERED = _("Unpowered")
 MODULE_DISCONNECTED = _("Disconnected")
 MODULE_DISABLED = _("Paused")
+
+
+def write_power(enable: bool):
+    for fn in CONTROLLER_POWER:
+        if os.path.exists(fn):
+            with open(fn, "w") as f:
+                f.write(
+                    "on"
+                    if enable and "firmware-attributes" in fn
+                    else (
+                        "1" if enable else "off" if "firmware-attributes" in fn else "0"
+                    )
+                )
+            logger.info(f"Controller power turned {'on' if enable else 'off'}.")
+            return True
+    return False
+
+
+def read_power():
+    for fn in CONTROLLER_POWER:
+        if os.path.exists(fn):
+            with open(fn, "r") as f:
+                power = f.read().strip()
+            return power in ("on", "1")
+    return None
+
+
+def read_modules():
+    for fn in CONTROLLER_MODULES:
+        if os.path.exists(fn):
+            with open(fn, "r") as f:
+                modules = f.read().strip()
+            return modules
+    return None
 
 
 class Ayaneo3Hidraw(GenericGamepadHidraw):
@@ -221,11 +261,8 @@ class Ayaneo3Hidraw(GenericGamepadHidraw):
         if time_waited < AYA_MIN_EJECT:
             time.sleep(AYA_MIN_EJECT - time_waited)
 
-        if os.path.exists(CONTROLLER_POWER):
-            with open(CONTROLLER_POWER, "w") as f:
-                f.write("off")
+        if write_power(False):
             time.sleep(0.5)
-            logger.info("Controller power turned off.")
         else:
             logger.warning("Kernel driver for modules is missing. Sleeping.")
             os.system("systemctl suspend")
@@ -303,96 +340,91 @@ def plugin_run(
             first_disabled = True
 
         found_device = True
-        if os.path.exists(CONTROLLER_MODULES):
-            with open(CONTROLLER_MODULES, "r") as f:
-                modules = f.read().strip()
+        if dconf.get("magic_modules", False):
+            modules = read_modules()
+            if modules is not None:
+                # Check if status should be refreshed
+                refresh = False
+                if modules == "both":
+                    found_device = True
 
-            # Check if status should be refreshed
-            refresh = False
-            if modules == "both":
-                found_device = True
+                    # Update status
+                    if others.get("info_right", None) in (
+                        MODULE_DISCONNECTED,
+                        MODULE_UNPOWERED,
+                    ):
+                        others["info_right"] = MODULE_ACTIVATING
+                        refresh = True
+                    if others.get("info_left", None) in (
+                        MODULE_DISCONNECTED,
+                        MODULE_UNPOWERED,
+                    ):
+                        others["info_left"] = MODULE_ACTIVATING
+                        refresh = True
+                else:
+                    if first:
+                        logger.info(
+                            f"Controller modules are set to '{modules}', waiting for 'both' to be connected."
+                        )
+                    found_device = False
 
-                # Update status
-                if others.get("info_right", None) in (
-                    MODULE_DISCONNECTED,
-                    MODULE_UNPOWERED,
-                ):
-                    others["info_right"] = MODULE_ACTIVATING
-                    refresh = True
-                if others.get("info_left", None) in (
-                    MODULE_DISCONNECTED,
-                    MODULE_UNPOWERED,
-                ):
-                    others["info_left"] = MODULE_ACTIVATING
-                    refresh = True
-            else:
-                if first:
+                    # Update status
+                    if modules != "left":
+                        refresh |= others.get("info_left", None) != MODULE_DISCONNECTED
+                        others["info_left"] = MODULE_DISCONNECTED
+                    if modules != "right":
+                        refresh |= others.get("info_right", None) != MODULE_DISCONNECTED
+                        others["info_right"] = MODULE_DISCONNECTED
+                    if modules == "right":
+                        if others.get("info_right", None) == MODULE_DISCONNECTED:
+                            others["info_right"] = MODULE_UNPOWERED
+                            refresh = True
+                    if modules == "left":
+                        if others.get("info_left", None) == MODULE_DISCONNECTED:
+                            others["info_left"] = MODULE_UNPOWERED
+                            refresh = True
+
+                    # Turning off controller power if not connected
+                    write_power(False)
+
+                if refresh:
+                    emit([])
+
+            pop = others.pop("pop", None)
+            if pop:
+                others.pop("reset", False)
+            if found_device or pop:
+                power = read_power()
+                if power is False:
                     logger.info(
-                        f"Controller modules are set to '{modules}', waiting for 'both' to be connected."
+                        f"Controller power is set to '{power}', powering on controller."
                     )
-                found_device = False
+                    write_power(True)
+                    time.sleep(1)
 
-                # Update status
-                if modules != "left":
-                    refresh |= others.get("info_left", None) != MODULE_DISCONNECTED
-                    others["info_left"] = MODULE_DISCONNECTED
-                if modules != "right":
-                    refresh |= others.get("info_right", None) != MODULE_DISCONNECTED
-                    others["info_right"] = MODULE_DISCONNECTED
-                if modules == "right":
-                    if others.get("info_right", None) == MODULE_DISCONNECTED:
-                        others["info_right"] = MODULE_UNPOWERED
-                        refresh = True
-                if modules == "left":
-                    if others.get("info_left", None) == MODULE_DISCONNECTED:
-                        others["info_left"] = MODULE_UNPOWERED
-                        refresh = True
-
-                # Turning off controller power if not connected
-                if os.path.exists(CONTROLLER_POWER):
-                    with open(CONTROLLER_POWER, "w") as f:
-                        f.write("off")
-
-            if refresh:
-                emit([])
-
-        pop = others.pop("pop", None)
-        if pop:
-            others.pop("reset", False)
-        if (found_device or pop) and os.path.exists(CONTROLLER_POWER):
-            with open(CONTROLLER_POWER, "r") as f:
-                power = f.read().strip()
-            if power != "on":
-                logger.info(
-                    f"Controller power is set to '{power}', powering on controller."
+            if pop:
+                logger.info(f"Popping controller module {pop}.")
+                d_vend = Ayaneo3Hidraw(
+                    vid=[AYA_VID],
+                    pid=[AYA_PID],
+                    required=True,
+                    application=[0xFF000001],
+                    vibration=conf.get("vibration", "medium"),
+                    config=others,
+                    emit=emit,
                 )
-                with open(CONTROLLER_POWER, "w") as f:
-                    f.write("on")
-                time.sleep(1)
-
-        if pop:
-            logger.info(f"Popping controller module {pop}.")
-            d_vend = Ayaneo3Hidraw(
-                vid=[AYA_VID],
-                pid=[AYA_PID],
-                required=True,
-                application=[0xFF000001],
-                vibration=conf.get("vibration", "medium"),
-                config=others,
-                emit=emit,
-            )
-            try:
-                d_vend.open()
-                d_vend.eject(
-                    left=pop in ["both", "left"], right=pop in ["both", "right"]
-                )
-                found_device = False
-            except Exception as e:
-                logger.error(f"Failed to pop controller module {pop} with error:\n{e}")
-                if DEBUG_MODE:
-                    raise e
-            finally:
-                d_vend.close(True)
+                try:
+                    d_vend.open()
+                    d_vend.eject(
+                        left=pop in ["both", "left"], right=pop in ["both", "right"]
+                    )
+                    found_device = False
+                except Exception as e:
+                    logger.error(f"Failed to pop controller module {pop} with error:\n{e}")
+                    if DEBUG_MODE:
+                        raise e
+                finally:
+                    d_vend.close(True)
 
         try:
             if not bool(enumerate_evs(vid=GAMEPAD_VID, pid=GAMEPAD_PID)):
@@ -486,7 +518,7 @@ def controller_loop(
         capabilities={EC("EV_KEY"): [EC("BTN_A")]},
         required=True,
         hide=True,
-        btn_map={**XBOX_BUTTON_MAP, EC("BTN_MODE"): "share"},
+        btn_map=AYA_GAMEPAD_BTN_MAPPINGS,
     )
 
     d_kbd_1 = GenericGamepadEvdev(
@@ -494,9 +526,7 @@ def controller_loop(
         pid=[KBD_PID],
         required=False,
         grab=False,
-        btn_map={
-            EC("KEY_F23"): "mode",
-        },
+        btn_map=dconf.get("at_btn_mapping", AYA3_AT_BTN_MAPPINGS),
     )
     d_kbd_2 = GenericGamepadEvdev(
         vid=[AYA_VID],
@@ -504,14 +534,20 @@ def controller_loop(
         required=True,
         grab=True,
         capabilities={EC("EV_KEY"): [EC("KEY_F21")]},
+        btn_map=dconf.get("btn_mapping", AYA3_BTN_MAPPINGS),
+    )
+    d_volume = UInputDevice(
+        name="Handheld Daemon Volume Keyboard",
+        phys="phys-hhd-vbtn",
+        capabilities={EC("EV_KEY"): [EC("KEY_VOLUMEUP"), EC("KEY_VOLUMEDOWN")]},
         btn_map={
-            EC("KEY_F24"): "keyboard",
-            EC("KEY_D"): "keyboard",
-            EC("KEY_F21"): "extra_l2",
-            EC("KEY_F22"): "extra_r2",
-            EC("KEY_L"): "extra_l1",
-            EC("KEY_R"): "extra_r1",
+            "key_volumeup": EC("KEY_VOLUMEUP"),
+            "key_volumedown": EC("KEY_VOLUMEDOWN"),
         },
+        vid=KBD_VID,
+        pid=KBD_PID,
+        volume_keyboard=True,
+        output_timestamps=True,
     )
     d_vend = Ayaneo3Hidraw(
         vid=[AYA_VID],
@@ -522,13 +558,6 @@ def controller_loop(
         config=others,
         emit=emit,
     )
-
-    kargs = {}
-    if dtype == "tecno":
-        kargs = {
-            "keyboard_is": "steam_qam",
-            "qam_hhd": True,
-        }
 
     match conf.get("swap_guide", "oem"):
         case "traditional":
@@ -548,9 +577,8 @@ def controller_loop(
         params=d_params,
         startselect_chord=conf.get("main_chords", "disabled"),
         keyboard_is="qam",
-        qam_hhd=True,
+        qam_hhd="full",
         swap_guide=swap_guide,
-        **kargs,
     )
 
     REPORT_FREQ_MIN = 25
@@ -584,18 +612,22 @@ def controller_loop(
         prepare(d_kbd_1)
         if d_kbd_2:
             prepare(d_kbd_2)
+        prepare(d_volume)
         for d in d_producers:
             prepare(d)
 
         prepare(d_vend)
-        changed_mode = d_vend.check()
-        if reset or _reset or changed_mode:
-            d_vend.init()
-            if not changed_mode:
-                d_vend.reset()
-            d_vend.save()
-            reset = False
-            _reset = False
+        if dconf.get("magic_modules", False):
+            changed_mode = d_vend.check()
+            if reset or _reset or changed_mode:
+                d_vend.init()
+                if not changed_mode:
+                    d_vend.reset()
+                d_vend.save()
+                reset = False
+                _reset = False
+            else:
+                d_vend.cfg()
         else:
             d_vend.cfg()
 
@@ -622,6 +654,7 @@ def controller_loop(
 
             if d_vend:
                 d_vend.consume(evs)
+            d_volume.consume(evs)
             for d in d_outs:
                 d.consume(evs)
 
